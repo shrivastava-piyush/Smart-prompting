@@ -2,8 +2,8 @@
 .swiftpm/
 build/
 DerivedData/
-*.xcodeproj/xcuserdata/
-*.xcworkspace/xcuserdata/
+*.xcodeproj/
+*.xcworkspace/
 .DS_Store
 .venv/
 __pycache__/

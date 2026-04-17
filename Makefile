@@ -5,9 +5,12 @@ SHELL := /bin/bash
 BUILD_DIR := build
 DEVELOPMENT_TEAM ?=
 
-.PHONY: all cli mac ios release test clean install-cli install-launchd refresh-ios doctor
+.PHONY: all cli mac ios release test clean install-cli install-launchd refresh-ios doctor setup
 
 all: cli
+
+setup:
+	@bash scripts/setup-xcode.sh
 
 cli:
 	@bash scripts/build-cli.sh

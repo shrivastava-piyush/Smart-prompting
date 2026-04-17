@@ -1,0 +1,66 @@
+name: SmartPromptingiOS
+options:
+  bundleIdPrefix: com.smartprompting
+  deploymentTarget:
+    iOS: "17.0"
+  xcodeVersion: "15.0"
+
+packages:
+  SmartPromptingCore:
+    path: ../..
+
+targets:
+  SmartPromptingiOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: .
+        excludes:
+          - project.yml
+          - "*.entitlements"
+          - KeyboardExtension
+          - ShareExtension
+    info:
+      path: Info.plist
+    entitlements:
+      path: SmartPromptingiOS.entitlements
+    settings:
+      base:
+        INFOPLIST_FILE: Apps/SmartPromptingiOS/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.smartprompting.ios
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        SWIFT_VERSION: "5.9"
+    dependencies:
+      - package: SmartPromptingCore
+      - target: SmartPromptingKeyboard
+      - target: SmartPromptingShare
+
+  SmartPromptingKeyboard:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: KeyboardExtension
+    info:
+      path: KeyboardExtension/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.smartprompting.ios.keyboard
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        SWIFT_VERSION: "5.9"
+    dependencies:
+      - package: SmartPromptingCore
+
+  SmartPromptingShare:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ShareExtension
+    info:
+      path: ShareExtension/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.smartprompting.ios.share
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        SWIFT_VERSION: "5.9"
+    dependencies:
+      - package: SmartPromptingCore

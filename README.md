@@ -102,7 +102,7 @@ sp use rust-refactor -v repo=my/proj -p | claude
 | `sp ls [--tag TAG]` | List all prompts, most-recently-used first. |
 | `sp edit <slug>` | Open the `.md` file in `$EDITOR`. |
 | `sp rm <slug>` | Delete a prompt (with confirmation). |
-| `sp doctor` | Print storage path, embedding backend, API key status. |
+| `sp doctor` | Print iCloud sync status, storage path, embedding backend, API key. |
 | `sp set-key <key>` | Store an Anthropic API key in Keychain (enables richer AutoTag). |
 
 ---
@@ -116,11 +116,17 @@ sp use rust-refactor -v repo=my/proj -p | claude
 **Install:**
 
 ```bash
+make setup            # generates .xcodeproj via XcodeGen
 make mac              # → build/SmartPrompting.dmg
 make install-launchd  # auto-launch at login
 ```
 
-First launch: right-click → Open (one-time Gatekeeper bypass).
+Or open directly in Xcode:
+```bash
+make setup
+open Apps/SmartPromptingMac/SmartPromptingMac.xcodeproj
+# Cmd+R to build & run
+```
 
 </td>
 <td width="50%">
@@ -147,9 +153,12 @@ First launch: right-click → Open (one-time Gatekeeper bypass).
 **Install (free, no Developer account):**
 
 ```bash
+make setup   # generates .xcodeproj
+
 # Path A: Xcode direct (simplest)
+open Apps/SmartPromptingiOS/SmartPromptingiOS.xcodeproj
 # Connect iPhone, enable Developer Mode,
-# select phone in Xcode, press ⌘R.
+# select phone, press ⌘R.
 
 # Path B: AltStore sideload
 DEVELOPMENT_TEAM=<id> make ios
@@ -163,6 +172,7 @@ DEVELOPMENT_TEAM=<id> make ios
 
 - Browse + search your full prompt library.
 - Tap to copy; long-press for placeholder form.
+- **Custom keyboard** — insert prompts in any app.
 - **Share Extension** — save text from any app.
 - **Siri / Shortcuts** — "Find prompt refactor".
 
