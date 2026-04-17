@@ -38,18 +38,110 @@ public final class AutoTag: @unchecked Sendable {
     // MARK: - Local fallback
 
     private func localFallback(body: String, placeholders: [String]) -> AutoTagResult {
-        let firstLine = body
-            .split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: true)
-            .first
-            .map(String.init) ?? "untitled prompt"
-        let title = String(firstLine.prefix(80))
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = Self.synthesizeTitle(from: body)
+        let tags = Self.extractTags(from: body)
         return AutoTagResult(
             title: title,
             slug: Slug.make(from: title),
-            tags: [],
+            tags: tags,
             placeholders: placeholders
         )
+    }
+
+    /// Build a short descriptive title from the body instead of just copying the first line.
+    /// Strategy: find the dominant action verb + object noun phrase, then title-case it.
+    static func synthesizeTitle(from body: String) -> String {
+        let cleaned = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return "Untitled Prompt" }
+
+        let words = cleaned
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+
+        // If it's very short (<=6 words), just use it directly as the title.
+        if words.count <= 6 {
+            return String(cleaned.prefix(60))
+        }
+
+        // Extract the first imperative sentence or clause (up to first period,
+        // newline, or "—" / ":" delimiter).
+        let firstClause: String = {
+            let delimiters = CharacterSet(charactersIn: ".!?\n:—–")
+            let parts = cleaned.unicodeScalars.split(whereSeparator: { delimiters.contains($0) })
+            return parts.first.map { String($0).trimmingCharacters(in: .whitespaces) } ?? cleaned
+        }()
+
+        // Strip leading filler like "Please", "You are", "I want you to",
+        // "You should", "Can you" to get to the actionable core.
+        let fillerPrefixes = [
+            "please ", "i want you to ", "i need you to ", "i'd like you to ",
+            "can you ", "could you ", "you are ", "you're ", "act as ",
+            "you will ", "you should ", "your task is to ", "your job is to ",
+            "i want ", "i need ", "help me ", "help us ",
+        ]
+        var core = firstClause
+        for prefix in fillerPrefixes {
+            if core.lowercased().hasPrefix(prefix) {
+                core = String(core.dropFirst(prefix.count))
+                break
+            }
+        }
+        core = core.trimmingCharacters(in: .whitespacesAndNewlines)
+        if core.isEmpty { core = firstClause }
+
+        // Truncate to ~60 chars on a word boundary.
+        if core.count > 60 {
+            let truncated = core.prefix(60)
+            if let lastSpace = truncated.lastIndex(of: " ") {
+                core = String(truncated[..<lastSpace])
+            } else {
+                core = String(truncated)
+            }
+        }
+
+        // Title-case: capitalize the first letter of each significant word.
+        let minor: Set<String> = ["a", "an", "the", "and", "or", "but", "in",
+                                   "on", "at", "to", "for", "of", "with", "by"]
+        let titled = core.split(separator: " ").enumerated().map { idx, word in
+            let w = String(word)
+            if idx == 0 || !minor.contains(w.lowercased()) {
+                return w.prefix(1).uppercased() + w.dropFirst().lowercased()
+            }
+            return w.lowercased()
+        }.joined(separator: " ")
+
+        return titled.isEmpty ? "Untitled Prompt" : titled
+    }
+
+    /// Pull a handful of keyword-tags from the body using simple TF heuristics.
+    static func extractTags(from body: String) -> [String] {
+        let stop: Set<String> = [
+            "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+            "have", "has", "had", "do", "does", "did", "will", "would", "shall",
+            "should", "may", "might", "must", "can", "could", "i", "you", "he",
+            "she", "it", "we", "they", "me", "him", "her", "us", "them", "my",
+            "your", "his", "its", "our", "their", "this", "that", "these", "those",
+            "and", "but", "or", "nor", "not", "so", "yet", "both", "either",
+            "neither", "each", "every", "all", "any", "few", "more", "most",
+            "other", "some", "such", "no", "only", "own", "same", "than", "too",
+            "very", "just", "because", "as", "until", "while", "of", "at", "by",
+            "for", "with", "about", "against", "between", "through", "during",
+            "before", "after", "above", "below", "to", "from", "up", "down",
+            "in", "out", "on", "off", "over", "under", "again", "further",
+            "then", "once", "here", "there", "when", "where", "why", "how",
+            "what", "which", "who", "whom", "if", "please", "make", "use",
+            "also", "like", "want", "need", "get", "let", "sure", "well",
+        ]
+        let words = body.lowercased()
+            .components(separatedBy: .alphanumerics.inverted)
+            .filter { $0.count >= 3 && !stop.contains($0) }
+
+        var freq: [String: Int] = [:]
+        for w in words { freq[w, default: 0] += 1 }
+        let top = freq.sorted { $0.value > $1.value }
+            .prefix(5)
+            .map(\.key)
+        return top
     }
 
     // MARK: - Anthropic call
