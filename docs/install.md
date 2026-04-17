@@ -107,16 +107,75 @@ Provisioning profiles from a free Apple ID last **7 days**. To refresh:
 4. As long as AltServer runs on your Mac on the same Wi-Fi, AltStore
    auto-refreshes the 7-day signature in the background.
 
-## How sync works
+## How sync works (important — read this first)
 
-- The markdown files in `iCloud Drive/SmartPrompting/prompts/` are the source
-  of truth. Each device's SQLite index at
-  `~/Library/Application Support/SmartPrompting/index.sqlite` is a
-  disposable cache rebuilt from the files.
-- Concurrent edits on two devices produce iCloud conflict copies, which show
-  up as sibling `.md` files — resolve by keeping the one you want.
+Smart Prompting does **not** have its own login or account system. Sync is
+handled entirely by **iCloud Drive**, which is built into macOS and iOS.
+
+### Setup (one-time per device)
+
+| Device | What to do |
+|---|---|
+| **Mac** | System Settings → Apple ID → iCloud → iCloud Drive → **ON** |
+| **iPhone** | Settings → [your name] → iCloud → iCloud Drive → **ON** |
+
+Both devices must be signed into the **same Apple ID**. That's it — no tokens,
+no passwords in the app.
+
+### How to verify sync is working
+
+```bash
+sp doctor
+```
+
+You should see:
+
+```
+iCloud Drive:      ✓ signed in & syncing
+                   Prompts saved on this Mac will appear on your iPhone.
+```
+
+If you see `✗ NOT syncing`, follow the instructions it prints.
+
+On iPhone, the app shows an orange **"iCloud Drive Not Connected"** banner at
+the top of the prompt list if sync isn't available, with a direct link to
+Settings.
+
+### What actually syncs
+
+- The markdown files in `~/Library/Mobile Documents/.../SmartPrompting/prompts/`
+  are the source of truth. iCloud Drive pushes new/changed files to all devices
+  signed into the same Apple ID.
+- Each device has its own disposable SQLite index at
+  `~/Library/Application Support/SmartPrompting/index.sqlite` — rebuilt from
+  the files on demand. Safe to delete.
+- Concurrent edits on two devices produce iCloud conflict copies (sibling
+  `.md` files). Resolve by keeping the one you want.
 - If iCloud is unavailable, prompts fall back to
-  `~/Library/Application Support/SmartPrompting/prompts/` (Mac only).
+  `~/Library/Application Support/SmartPrompting/prompts/` (local only —
+  won't sync).
+
+## Custom keyboard (iOS)
+
+Smart Prompting includes a **custom keyboard extension** that lets you search
+and insert prompts directly from *any* text field on iPhone — ChatGPT, Claude,
+Safari, Notes, etc.
+
+### Enable it
+
+1. After installing the app: Settings → General → Keyboard → Keyboards →
+   **Add New Keyboard** → **Smart Prompting**.
+2. Tap "Smart Prompting" in the list → toggle **Allow Full Access** ON.
+   (Needed so the keyboard can read your prompt files from iCloud Drive.)
+3. In any text field, tap the 🌐 globe key to switch to Smart Prompting.
+
+### How it works
+
+- A search bar at the top lets you find prompts by keyword or semantic match.
+- Tap a result to **insert the full prompt text** at the cursor position.
+- Tap the 🌐 globe button to switch back to the regular keyboard.
+- If a prompt has `{{placeholders}}`, they're inserted as-is so you can
+  fill them in manually.
 
 ## AutoTag (optional, free tier)
 
@@ -127,16 +186,24 @@ Claude Haiku (~$0.0001 per save):
 sp set-key sk-ant-...
 ```
 
-Without a key, the local fallback uses the first line of the prompt as the
-title, leaves tags empty, and still extracts `{{placeholders}}` via regex —
-the app is fully usable offline.
+Without a key, the local fallback extracts a smart title from the prompt body
+(strips filler words, title-cases the core action phrase), generates keyword
+tags via frequency analysis, and extracts `{{placeholders}}` via regex — the
+app is fully usable offline.
 
 ## Troubleshooting
 
+- **`sp doctor` shows "✗ NOT syncing"**: sign into iCloud and enable iCloud
+  Drive. On Mac: System Settings → Apple ID → iCloud → iCloud Drive. On
+  iPhone: Settings → [your name] → iCloud → iCloud Drive.
+- **iOS app shows "iCloud Drive Not Connected"**: same fix — sign in with
+  the **same Apple ID** as your Mac.
+- **iOS app opens but prompt list is empty**: (1) check that iCloud Drive
+  is enabled on both devices with the same Apple ID; (2) wait ~60 seconds
+  for iCloud to sync; (3) pull-to-refresh in the app.
 - **`sp doctor` shows "hashing" backend**: you're on a platform without
   `NaturalLanguage` (e.g. Linux). Build & run on macOS to get real embeddings.
-- **Hotkey does nothing**: grant Accessibility permission in System Settings.
-- **iCloud path shows Application Support**: sign into iCloud and enable
-  iCloud Drive in System Settings.
-- **iOS app opens but list is empty**: confirm the iCloud container ID
-  matches the Mac app in both entitlements files.
+- **Hotkey does nothing**: grant Accessibility permission in System Settings →
+  Privacy & Security → Accessibility.
+- **Keyboard extension doesn't appear**: Settings → General → Keyboard →
+  Keyboards → Add → Smart Prompting. Toggle "Allow Full Access".

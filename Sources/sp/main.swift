@@ -235,18 +235,39 @@ struct Remove: AsyncParsableCommand {
 
 struct Doctor: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Diagnose setup: storage path, embedding model, API key presence."
+        abstract: "Diagnose setup: iCloud status, storage path, embedding model, API key."
     )
 
     func run() async throws {
         let sp = try SmartPrompting()
-        print("Prompts directory: \(sp.store.promptsDir.path)")
+
+        // iCloud status — the most important check
+        let syncStatus = ICloudSync.status()
+        switch syncStatus {
+        case .syncing(let path):
+            print("iCloud Drive:      ✓ signed in & syncing")
+            print("                   Prompts saved on this Mac will appear on your iPhone.")
+            print("Prompts directory: \(path)")
+        case .local(let path, let reason):
+            print("iCloud Drive:      ✗ NOT syncing")
+            print("                   \(reason)")
+            print("Prompts directory: \(path)  (local only — will NOT appear on other devices)")
+        }
+
         print("Index DB:          \(sp.store.dbURL.path)")
-        print("Embedding backend: \(Embeddings.shared.backend.rawValue) (\(Embeddings.shared.dimension)d)")
+        print("Embedding backend: \(Embeddings.shared.backend.rawValue) (\(Embeddings.shared.dimension)-dim)")
         let hasKey = KeychainConfig.anthropicAPIKey() != nil
-        print("Anthropic API key: \(hasKey ? "found (AutoTag enabled)" : "not set (local fallback)")")
+        print("Anthropic API key: \(hasKey ? "✓ found (AutoTag via Claude Haiku)" : "✗ not set (local title/tag fallback)")")
         let all = try sp.store.all()
         print("Prompts indexed:   \(all.count)")
+
+        if case .local = syncStatus {
+            print("")
+            print("To enable cross-device sync:")
+            print("  1. Open System Settings → Apple ID → iCloud → iCloud Drive → turn ON")
+            print("  2. Re-run `sp doctor` to confirm")
+            print("  3. On iPhone: Settings → Apple ID → iCloud → iCloud Drive → ON (same Apple ID)")
+        }
     }
 }
 

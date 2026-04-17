@@ -9,6 +9,32 @@ struct PromptListView: View {
     var body: some View {
         NavigationStack {
             List {
+                if !vm.iCloudSyncing {
+                    Section {
+                        HStack(spacing: 12) {
+                            Image(systemName: "exclamationmark.icloud")
+                                .font(.title2)
+                                .foregroundStyle(.orange)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("iCloud Drive Not Connected")
+                                    .font(.subheadline.weight(.semibold))
+                                Text(vm.iCloudMessage.isEmpty
+                                     ? "Sign into iCloud with the same Apple ID as your Mac to sync prompts across devices."
+                                     : vm.iCloudMessage)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Button("Open Settings") {
+                                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                                        UIApplication.shared.open(url)
+                                    }
+                                }
+                                .font(.caption.weight(.medium))
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+
                 ForEach(vm.results, id: \.prompt.id) { hit in
                     Button { selected = hit.prompt } label: {
                         VStack(alignment: .leading, spacing: 4) {

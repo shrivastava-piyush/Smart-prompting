@@ -8,17 +8,34 @@ final class LibraryViewModel: ObservableObject {
     @Published var results: [ScoredPrompt] = []
     @Published var allPrompts: [Prompt] = []
     @Published var toast: String = ""
+    @Published var iCloudSyncing: Bool = false
+    @Published var iCloudMessage: String = ""
 
     private let sp: SmartPrompting?
 
     init() {
         self.sp = try? SmartPrompting()
+        checkICloudStatus()
+    }
+
+    func checkICloudStatus() {
+        let status = ICloudSync.status()
+        switch status {
+        case .syncing:
+            iCloudSyncing = true
+            iCloudMessage = ""
+        case .local(_, let reason):
+            iCloudSyncing = false
+            iCloudMessage = reason
+        }
     }
 
     func refresh() {
         guard let sp = sp else { return }
+        try? sp.store.syncIndexFromDisk()
         allPrompts = (try? sp.store.all()) ?? []
         search()
+        checkICloudStatus()
     }
 
     func search() {

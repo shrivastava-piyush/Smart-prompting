@@ -16,6 +16,21 @@ struct MenuBarScene: View {
 
             Divider()
 
+            if !ICloudSync.isSyncing {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.icloud")
+                        .foregroundStyle(.orange)
+                    VStack(alignment: .leading) {
+                        Text("iCloud not connected")
+                            .font(.caption.weight(.semibold))
+                        Text("Prompts won't sync to iPhone. Sign into iCloud Drive in System Settings.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Divider()
+            }
+
             if vm.allPrompts.isEmpty {
                 Text("No prompts yet.\nUse `sp add` in the terminal, or drop a .md file into the prompts folder.")
                     .font(.caption)
