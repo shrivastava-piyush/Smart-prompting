@@ -8,8 +8,8 @@ cd "$(dirname "$0")/.."
 BUILD_DIR="build"
 mkdir -p "$BUILD_DIR"
 
-if [[ ! -d "Apps/SmartPromptingMac.xcodeproj" ]]; then
-    echo "error: Apps/SmartPromptingMac.xcodeproj not found." >&2
+if [[ ! -d "Apps/SmartPromptingMac/SmartPromptingMac.xcodeproj" ]]; then
+    echo "error: Apps/SmartPromptingMac/SmartPromptingMac.xcodeproj not found." >&2
     echo "       Open Apps/SmartPromptingMac/*.swift in a new Xcode project," >&2
     echo "       link SmartPromptingCore, then re-run. See docs/install.md." >&2
     exit 1
@@ -17,7 +17,7 @@ fi
 
 echo "==> archive macOS app"
 xcodebuild \
-    -project Apps/SmartPromptingMac.xcodeproj \
+    -project Apps/SmartPromptingMac/SmartPromptingMac.xcodeproj \
     -scheme SmartPromptingMac \
     -configuration Release \
     -archivePath "$BUILD_DIR/Mac.xcarchive" \

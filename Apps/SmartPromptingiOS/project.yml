@@ -18,6 +18,7 @@ targets:
         excludes:
           - project.yml
           - "*.entitlements"
+          - Info.plist
           - KeyboardExtension
           - ShareExtension
     info:
@@ -26,7 +27,6 @@ targets:
       path: SmartPromptingiOS.entitlements
     settings:
       base:
-        INFOPLIST_FILE: Apps/SmartPromptingiOS/Info.plist
         PRODUCT_BUNDLE_IDENTIFIER: com.smartprompting.ios
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
         SWIFT_VERSION: "5.9"

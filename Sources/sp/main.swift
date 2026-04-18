@@ -3,7 +3,6 @@ import Darwin
 import Foundation
 import SmartPromptingCore
 
-@main
 struct SP: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "sp",
@@ -11,6 +10,17 @@ struct SP: AsyncParsableCommand {
         subcommands: [Add.self, Find.self, Use.self, List.self, Edit.self, Remove.self, Doctor.self, SetKey.self],
         defaultSubcommand: Find.self
     )
+
+    static func promptUse(sp: SmartPrompting, prompt: Prompt) throws -> String {
+        var map: [String: String] = [:]
+        for name in prompt.placeholders {
+            FileHandle.standardError.write(Data("\(name): ".utf8))
+            map[name] = readLine() ?? ""
+        }
+        let rendered = try TemplateEngine.render(prompt.body, with: map)
+        try sp.store.recordUse(prompt)
+        return rendered
+    }
 }
 
 // MARK: - sp add
@@ -109,7 +119,7 @@ struct Find: AsyncParsableCommand {
             return
         }
         let picked = hits[n - 1].prompt
-        let rendered = try promptUse(sp: sp, prompt: picked)
+        let rendered = try SP.promptUse(sp: sp, prompt: picked)
         Clipboard.copy(rendered)
         print(rendered)
         FileHandle.standardError.write(Data("✓ copied to clipboard\n".utf8))
@@ -296,15 +306,4 @@ struct SetKey: AsyncParsableCommand {
     }
 }
 
-// MARK: - helpers
-
-func promptUse(sp: SmartPrompting, prompt: Prompt) throws -> String {
-    var map: [String: String] = [:]
-    for name in prompt.placeholders {
-        FileHandle.standardError.write(Data("\(name): ".utf8))
-        map[name] = readLine() ?? ""
-    }
-    let rendered = try TemplateEngine.render(prompt.body, with: map)
-    try sp.store.recordUse(prompt)
-    return rendered
-}
+SP.main()

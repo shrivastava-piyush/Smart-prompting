@@ -18,6 +18,9 @@ public final class PromptStore: @unchecked Sendable {
     ) throws {
         self.promptsDir = try promptsDir ?? ICloudSync.promptsDirectory()
         let idx = try indexDir ?? ICloudSync.indexDirectory()
+        if !FileManager.default.fileExists(atPath: idx.path) {
+            try FileManager.default.createDirectory(at: idx, withIntermediateDirectories: true)
+        }
         self.dbURL = idx.appendingPathComponent("index.sqlite")
         self.embeddings = embeddings
         self.dbQueue = try DatabaseQueue(path: dbURL.path)

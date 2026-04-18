@@ -9,7 +9,7 @@ struct PromptListView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                LazyVStack(spacing: 0) {
+                LazyVStack(spacing: 16) {
                     if !vm.iCloudSyncing {
                         iCloudBanner
                     }
@@ -17,20 +17,34 @@ struct PromptListView: View {
                     if vm.results.isEmpty {
                         emptyState
                     } else {
-                        promptGrid
+                        ForEach(vm.results, id: \.prompt.id) { hit in
+                            PromptCard(prompt: hit.prompt) {
+                                selected = hit.prompt
+                            }
+                            .contextMenu {
+                                Button { vm.copy(hit.prompt) } label: {
+                                    Label("Copy", systemImage: "doc.on.doc")
+                                }
+                                Button(role: .destructive) { vm.delete(hit.prompt) } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                        }
                     }
                 }
+                .padding()
             }
             .background(Color(.systemGroupedBackground))
-            .searchable(text: $vm.query, prompt: "Search prompts...")
+            .searchable(text: $vm.query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search Library")
             .onChange(of: vm.query) { _, _ in vm.search() }
             .refreshable { vm.refresh() }
-            .navigationTitle("Smart Prompting")
+            .navigationTitle("Prompts")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showAdd = true } label: {
                         Image(systemName: "plus.circle.fill")
-                            .font(.title3)
+                            .symbolRenderingMode(.hierarchical)
+                            .font(.title2)
                     }
                 }
             }
@@ -41,9 +55,9 @@ struct PromptListView: View {
                 }
             }
             .sheet(isPresented: $showAdd) {
-                AddPromptView { body in
+                AddPromptView { title, body in
                     Task {
-                        await vm.add(body: body)
+                        await vm.add(title: title, body: body)
                         showAdd = false
                     }
                 }
@@ -56,367 +70,177 @@ struct PromptListView: View {
         }
     }
 
-    // MARK: - iCloud banner
-
     private var iCloudBanner: some View {
-        HStack(spacing: 14) {
-            ZStack {
-                Circle()
-                    .fill(Color.orange.opacity(0.15))
-                    .frame(width: 44, height: 44)
-                Image(systemName: "icloud.slash")
-                    .font(.title3)
-                    .foregroundStyle(.orange)
-            }
-            VStack(alignment: .leading, spacing: 3) {
-                Text("iCloud Sync Unavailable")
-                    .font(.subheadline.weight(.semibold))
-                Text(vm.iCloudMessage.isEmpty
-                     ? "Sign into iCloud with the same Apple ID as your Mac."
-                     : vm.iCloudMessage)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
+        HStack {
+            Label("iCloud Sync Off", systemImage: "icloud.slash")
+                .font(.subheadline.bold())
+                .foregroundStyle(.orange)
             Spacer()
-            Button {
-                if let url = URL(string: UIApplication.openSettingsURLString) {
-                    UIApplication.shared.open(url)
-                }
-            } label: {
-                Text("Fix")
-                    .font(.caption.weight(.bold))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 6)
-                    .background(Color.orange)
-                    .foregroundStyle(.white)
-                    .clipShape(Capsule())
-            }
-        }
-        .padding(14)
-        .background(Color.orange.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .padding(.horizontal)
-        .padding(.top, 8)
-    }
-
-    // MARK: - Prompt grid
-
-    private var promptGrid: some View {
-        LazyVStack(spacing: 12) {
-            ForEach(vm.results, id: \.prompt.id) { hit in
-                PromptCard(prompt: hit.prompt, score: hit.score) {
-                    selected = hit.prompt
-                } onQuickCopy: {
-                    vm.copy(hit.prompt)
-                } onDelete: {
-                    vm.delete(hit.prompt)
-                }
-            }
-        }
-        .padding(.horizontal)
-        .padding(.top, 12)
-        .padding(.bottom, 80)
-    }
-
-    // MARK: - Empty state
-
-    private var emptyState: some View {
-        VStack(spacing: 16) {
-            Spacer().frame(height: 60)
-            Image(systemName: "text.bubble")
-                .font(.system(size: 56))
-                .foregroundStyle(.quaternary)
-            Text("No Prompts Yet")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Text("Save your first prompt with the **+** button\nor use `sp add` in the terminal.")
-                .font(.subheadline)
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-            Button {
-                showAdd = true
-            } label: {
-                Label("Add Prompt", systemImage: "plus")
-                    .font(.subheadline.weight(.medium))
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 10)
-                    .background(Color.accentColor)
-                    .foregroundStyle(.white)
-                    .clipShape(Capsule())
-            }
-            .padding(.top, 4)
+            Image(systemName: "chevron.right")
+                .font(.caption2.bold())
+                .foregroundStyle(.orange.opacity(0.5))
         }
         .padding()
+        .background(Color.orange.opacity(0.1))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
-    // MARK: - Toast
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            Spacer().frame(height: 80)
+            Image(systemName: "doc.text.magnifyingglass")
+                .font(.system(size: 60))
+                .foregroundStyle(.quaternary)
+            Text("No Prompts Found")
+                .font(.headline)
+            Text("Your library is empty or matches nothing.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+    }
 
     private var toastBanner: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-            Text(vm.toast)
-                .font(.subheadline.weight(.medium))
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .background(.ultraThickMaterial)
-        .clipShape(Capsule())
-        .shadow(color: .black.opacity(0.1), radius: 10, y: 5)
-        .padding(.bottom, 20)
-        .transition(.move(edge: .bottom).combined(with: .opacity))
-        .animation(.spring(duration: 0.3), value: vm.toast)
-        .task {
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            withAnimation { vm.toast = "" }
-        }
+        Text(vm.toast)
+            .font(.footnote.bold())
+            .foregroundStyle(.white)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Capsule().fill(Color.primary))
+            .padding(.bottom, 20)
     }
 }
-
-// MARK: - Prompt card
 
 struct PromptCard: View {
     let prompt: Prompt
-    let score: Double
     let onTap: () -> Void
-    let onQuickCopy: () -> Void
-    let onDelete: () -> Void
-
-    @State private var pressed = false
 
     var body: some View {
         Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 10) {
-                // Header: title + copy button
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(prompt.title)
-                            .font(.headline)
-                            .foregroundStyle(.primary)
-                            .lineLimit(2)
-
-                        if prompt.useCount > 0 {
-                            HStack(spacing: 4) {
-                                Image(systemName: "arrow.counterclockwise")
-                                Text("Used \(prompt.useCount)\(prompt.useCount == 1 ? " time" : " times")")
-                            }
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                        }
-                    }
-
+            VStack(alignment: .leading, spacing: 12) {
+                // Category/Title Header
+                HStack {
+                    Text(prompt.title.uppercased())
+                        .font(.caption2.bold())
+                        .foregroundStyle(.secondary)
+                        .tracking(1)
+                    
                     Spacer()
-
-                    Button(action: onQuickCopy) {
-                        Image(systemName: "doc.on.doc")
-                            .font(.body)
-                            .foregroundStyle(.accentColor)
-                            .padding(8)
-                            .background(Color.accentColor.opacity(0.1))
-                            .clipShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                // Body preview
-                Text(prompt.body.prefix(160))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(3)
-
-                // Placeholders
-                if !prompt.placeholders.isEmpty {
-                    HStack(spacing: 6) {
-                        Image(systemName: "curlybraces")
-                            .font(.caption2)
+                    
+                    if !prompt.placeholders.isEmpty {
+                        Image(systemName: "variable")
+                            .font(.caption2.bold())
                             .foregroundStyle(.orange)
-                        Text(prompt.placeholders.map { "{{\($0)}}" }.joined(separator: "  "))
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.orange.opacity(0.8))
                     }
                 }
 
-                // Tags
-                if !prompt.tags.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
-                            ForEach(prompt.tags, id: \.self) { tag in
-                                Text(tag)
-                                    .font(.caption2.weight(.medium))
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 4)
-                                    .background(Color.accentColor.opacity(0.1))
-                                    .foregroundStyle(.accentColor)
-                                    .clipShape(Capsule())
-                            }
+                // Main Content
+                Text(prompt.body)
+                    .font(.body)
+                    .foregroundStyle(.primary)
+                    .lineLimit(3)
+                    .multilineTextAlignment(.leading)
+
+                // Footer
+                HStack(spacing: 8) {
+                    if !prompt.tags.isEmpty {
+                        ForEach(prompt.tags.prefix(2), id: \.self) { tag in
+                            Text("#\(tag)")
+                                .font(.caption2.bold())
+                                .foregroundStyle(Color.accentColor)
                         }
                     }
+                    
+                    Spacer()
+                    
+                    Label("\(prompt.useCount)", systemImage: "bolt.fill")
+                        .font(.caption2.bold())
+                        .foregroundStyle(.secondary)
                 }
             }
             .padding(16)
-            .background(Color(.systemBackground))
+            .background(Color(.secondarySystemGroupedBackground))
             .clipShape(RoundedRectangle(cornerRadius: 16))
-            .shadow(color: .black.opacity(0.04), radius: 8, y: 2)
+            .shadow(color: .black.opacity(0.05), radius: 5, x: 0, y: 2)
         }
-        .buttonStyle(.plain)
-        .contextMenu {
-            Button { onQuickCopy() } label: {
-                Label("Copy to Clipboard", systemImage: "doc.on.doc")
-            }
-            Button { onTap() } label: {
-                Label("View & Fill Placeholders", systemImage: "square.and.pencil")
-            }
-            Divider()
-            Button(role: .destructive) { onDelete() } label: {
-                Label("Delete", systemImage: "trash")
-            }
-        }
+        .buttonStyle(PlainButtonStyle())
     }
 }
-
-// MARK: - Detail view
 
 struct PromptDetailView: View {
     let prompt: Prompt
     let onCopy: ([String: String]) -> Void
-
     @State private var values: [String: String] = [:]
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    // Title card
+            Form {
+                Section {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(prompt.title)
-                            .font(.title2.weight(.bold))
-                        if !prompt.tags.isEmpty {
-                            HStack(spacing: 6) {
-                                ForEach(prompt.tags, id: \.self) { tag in
-                                    Text(tag)
-                                        .font(.caption.weight(.medium))
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 4)
-                                        .background(Color.accentColor.opacity(0.1))
-                                        .foregroundStyle(.accentColor)
-                                        .clipShape(Capsule())
-                                }
-                            }
-                        }
-                        HStack(spacing: 16) {
-                            Label("Used \(prompt.useCount)x", systemImage: "arrow.counterclockwise")
-                            Label(prompt.slug, systemImage: "link")
-                        }
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                    }
-                    .padding(20)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(.systemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-
-                    // Placeholders
-                    if !prompt.placeholders.isEmpty {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Label("Placeholders", systemImage: "curlybraces")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.orange)
-                            ForEach(prompt.placeholders, id: \.self) { name in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(name)
-                                        .font(.caption.weight(.medium).monospaced())
-                                        .foregroundStyle(.secondary)
-                                    TextField("Enter \(name)...", text: Binding(
-                                        get: { values[name] ?? "" },
-                                        set: { values[name] = $0 }
-                                    ))
-                                    .textFieldStyle(.roundedBorder)
-                                }
-                            }
-                        }
-                        .padding(20)
-                        .background(Color(.systemBackground))
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                    }
-
-                    // Body
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Prompt Body")
-                            .font(.subheadline.weight(.semibold))
+                        Text(prompt.title.uppercased())
+                            .font(.caption2.bold())
                             .foregroundStyle(.secondary)
                         Text(prompt.body)
-                            .font(.system(.subheadline, design: .monospaced))
-                            .foregroundStyle(.primary)
-                            .textSelection(.enabled)
+                            .font(.body)
                     }
-                    .padding(20)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(.systemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .padding(.vertical, 8)
                 }
-                .padding()
+
+                if !prompt.placeholders.isEmpty {
+                    Section("Inputs") {
+                        ForEach(prompt.placeholders, id: \.self) { name in
+                            TextField(name, text: Binding(
+                                get: { values[name] ?? "" },
+                                set: { values[name] = $0 }
+                            ))
+                        }
+                    }
+                }
+
+                Section {
+                    Button(action: { onCopy(values) }) {
+                        Text("Copy to Clipboard")
+                            .frame(maxWidth: .infinity)
+                            .font(.headline)
+                    }
+                    .disabled(prompt.placeholders.contains { values[$0]?.isEmpty ?? true })
+                    .listRowBackground(Color.accentColor)
+                    .foregroundStyle(.white)
+                }
             }
-            .background(Color(.systemGroupedBackground))
-            .navigationTitle("Prompt")
+            .navigationTitle("Use Prompt")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button {
-                        onCopy(values)
-                    } label: {
-                        Label("Copy", systemImage: "doc.on.doc.fill")
-                            .font(.subheadline.weight(.semibold))
-                    }
+                    Button("Done") { dismiss() }
                 }
             }
         }
     }
 }
 
-// MARK: - Add prompt view
-
 struct AddPromptView: View {
-    let onSave: (String) -> Void
-    @State private var body: String = ""
-    @FocusState private var focused: Bool
+    let onSave: (String, String) -> Void
+    @State private var title: String = ""
+    @State private var promptBody: String = ""
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                // Header hint
-                HStack {
-                    Image(systemName: "lightbulb.fill")
-                        .foregroundStyle(.yellow)
-                    Text("Paste or type your prompt. Use `{{name}}` for placeholders.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            Form {
+                TextField("Identifier (e.g. Code Review)", text: $title)
+                    .font(.headline)
+                
+                ZStack(alignment: .topLeading) {
+                    if promptBody.isEmpty {
+                        Text("Paste your prompt content here...")
+                            .foregroundStyle(.placeholder)
+                            .padding(.top, 8)
+                            .padding(.leading, 5)
+                    }
+                    TextEditor(text: $promptBody)
+                        .frame(minHeight: 300)
                 }
-                .padding(.horizontal)
-                .padding(.vertical, 10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color(.systemGroupedBackground))
-
-                TextEditor(text: $body)
-                    .font(.system(.body, design: .monospaced))
-                    .focused($focused)
-                    .padding(12)
-                    .scrollContentBackground(.hidden)
-
-                // Character count
-                HStack {
-                    Spacer()
-                    Text("\(body.count) characters")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(.horizontal)
-                .padding(.bottom, 8)
             }
             .navigationTitle("New Prompt")
             .navigationBarTitleDisplayMode(.inline)
@@ -425,16 +249,11 @@ struct AddPromptView: View {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button {
-                        onSave(body)
-                    } label: {
-                        Text("Save")
-                            .font(.subheadline.weight(.bold))
-                    }
-                    .disabled(body.trimmingCharacters(in: .whitespaces).isEmpty)
+                    Button("Save") { onSave(title, promptBody) }
+                        .disabled(title.isEmpty || promptBody.isEmpty)
+                        .bold()
                 }
             }
-            .onAppear { focused = true }
         }
     }
 }

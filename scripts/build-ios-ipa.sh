@@ -14,8 +14,8 @@ if [[ -z "${DEVELOPMENT_TEAM:-}" ]]; then
     exit 1
 fi
 
-if [[ ! -d "Apps/SmartPromptingiOS.xcodeproj" ]]; then
-    echo "error: Apps/SmartPromptingiOS.xcodeproj not found." >&2
+if [[ ! -d "Apps/SmartPromptingiOS/SmartPromptingiOS.xcodeproj" ]]; then
+    echo "error: Apps/SmartPromptingiOS/SmartPromptingiOS.xcodeproj not found." >&2
     echo "       Create it in Xcode from Apps/SmartPromptingiOS/* sources, link" >&2
     echo "       SmartPromptingCore as a local SPM, then re-run. See docs/install.md." >&2
     exit 1
@@ -23,7 +23,7 @@ fi
 
 echo "==> archive iOS app"
 xcodebuild \
-    -project Apps/SmartPromptingiOS.xcodeproj \
+    -project Apps/SmartPromptingiOS/SmartPromptingiOS.xcodeproj \
     -scheme SmartPromptingiOS \
     -configuration Release \
     -destination 'generic/platform=iOS' \

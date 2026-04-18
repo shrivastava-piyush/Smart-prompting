@@ -63,7 +63,11 @@ public enum ICloudSync {
         }
 
         // Check 3: default iCloud Drive folder (com~apple~CloudDocs).
+        #if os(macOS)
         let home = fm.homeDirectoryForCurrentUser
+        #else
+        let home = fm.urls(for: .documentDirectory, in: .userDomainMask).first!
+        #endif
         let cloudDocs = home.appendingPathComponent(
             "Library/Mobile Documents/com~apple~CloudDocs/SmartPrompting/\(subdir)",
             isDirectory: true

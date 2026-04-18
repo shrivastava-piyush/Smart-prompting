@@ -66,9 +66,9 @@ final class LibraryViewModel: ObservableObject {
         refresh()
     }
 
-    func add(body: String) async {
+    func add(title: String, body: String) async {
         guard let sp = sp, !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        _ = try? await sp.create(from: body)
+        _ = try? await sp.create(from: body, titleHint: title)
         refresh()
     }
 }
