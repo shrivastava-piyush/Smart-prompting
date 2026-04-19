@@ -2,9 +2,6 @@ import Foundation
 import GRDB
 
 /// Markdown-file-backed store with a local SQLite index (FTS5 + embedding blobs).
-///
-/// The markdown files in iCloud Drive are the source of truth. The SQLite index
-/// is rebuilt from them on demand — safe to delete at any time.
 public final class PromptStore: @unchecked Sendable {
     public let promptsDir: URL
     public let dbURL: URL
@@ -63,6 +60,9 @@ public final class PromptStore: @unchecked Sendable {
     /// Create a new prompt, write markdown, update index. Returns final Prompt.
     @discardableResult
     public func add(_ prompt: Prompt) throws -> Prompt {
+        let isScoped = promptsDir.startAccessingSecurityScopedResource()
+        defer { if isScoped { promptsDir.stopAccessingSecurityScopedResource() } }
+
         var p = prompt
         if p.placeholders.isEmpty {
             p.placeholders = TemplateEngine.placeholders(in: p.body)
@@ -73,7 +73,21 @@ public final class PromptStore: @unchecked Sendable {
 
         let url = fileURL(for: p.slug)
         let text = try MarkdownCodec.encode(p)
-        try text.write(to: url, atomically: true, encoding: .utf8)
+        
+        var coordinationError: NSError?
+        var writeError: Error?
+        
+        let coordinator = NSFileCoordinator(filePresenter: nil)
+        coordinator.coordinate(writingItemAt: url, options: .forReplacing, error: &coordinationError) { writeURL in
+            do {
+                try text.write(to: writeURL, atomically: true, encoding: .utf8)
+            } catch {
+                writeError = error
+            }
+        }
+        
+        if let error = writeError { throw error }
+        if let error = coordinationError { throw error }
 
         try upsertIndex(p, fileMTime: mtime(of: url))
         return p
@@ -82,19 +96,63 @@ public final class PromptStore: @unchecked Sendable {
     /// Overwrite an existing prompt. The slug is preserved.
     @discardableResult
     public func update(_ prompt: Prompt) throws -> Prompt {
+        let isScoped = promptsDir.startAccessingSecurityScopedResource()
+        defer { if isScoped { promptsDir.stopAccessingSecurityScopedResource() } }
+
         var p = prompt
         p.placeholders = TemplateEngine.placeholders(in: p.body)
         p.updated = Date()
         let url = fileURL(for: p.slug)
         let text = try MarkdownCodec.encode(p)
-        try text.write(to: url, atomically: true, encoding: .utf8)
+        
+        var coordinationError: NSError?
+        var writeError: Error?
+        
+        let coordinator = NSFileCoordinator(filePresenter: nil)
+        coordinator.coordinate(writingItemAt: url, options: .forReplacing, error: &coordinationError) { writeURL in
+            do {
+                try text.write(to: writeURL, atomically: true, encoding: .utf8)
+            } catch {
+                writeError = error
+            }
+        }
+        
+        if let error = writeError { throw error }
+        if let error = coordinationError { throw error }
+        
         try upsertIndex(p, fileMTime: mtime(of: url))
         return p
     }
 
     public func delete(slug: String) throws {
+        let isScoped = promptsDir.startAccessingSecurityScopedResource()
+        defer { if isScoped { promptsDir.stopAccessingSecurityScopedResource() } }
+
         let url = fileURL(for: slug)
-        try? FileManager.default.removeItem(at: url)
+        let icloudURL = promptsDir.appendingPathComponent(".\(slug).md.icloud")
+        
+        let coordinator = NSFileCoordinator(filePresenter: nil)
+        var coordinationError: NSError?
+        var deleteError: Error?
+        
+        coordinator.coordinate(writingItemAt: url, options: .forDeleting, error: &coordinationError) { deleteURL in
+            do {
+                if FileManager.default.fileExists(atPath: deleteURL.path) {
+                    try FileManager.default.removeItem(at: deleteURL)
+                }
+            } catch {
+                deleteError = error
+            }
+        }
+        
+        // Also try to remove the .icloud placeholder if it exists
+        coordinator.coordinate(writingItemAt: icloudURL, options: .forDeleting, error: nil) { deleteURL in
+            try? FileManager.default.removeItem(at: deleteURL)
+        }
+        
+        if let error = deleteError { throw error }
+        if let error = coordinationError { throw error }
+        
         _ = try dbQueue.write { db in
             try db.execute(sql: "DELETE FROM prompts WHERE slug = ?", arguments: [slug])
             try db.execute(sql: "DELETE FROM prompts_fts WHERE slug = ?", arguments: [slug])
@@ -143,16 +201,40 @@ public final class PromptStore: @unchecked Sendable {
 
     /// Walk the prompts directory, upsert new/changed files, remove stale rows.
     public func syncIndexFromDisk() throws {
+        let isScoped = promptsDir.startAccessingSecurityScopedResource()
+        defer { if isScoped { promptsDir.stopAccessingSecurityScopedResource() } }
+
         let fm = FileManager.default
         let files = (try? fm.contentsOfDirectory(
             at: promptsDir,
-            includingPropertiesForKeys: [.contentModificationDateKey]
+            includingPropertiesForKeys: [.contentModificationDateKey, .ubiquitousItemDownloadingStatusKey]
         )) ?? []
 
         var slugsOnDisk = Set<String>()
-        for file in files where file.pathExtension == "md" {
-            let slug = file.deletingPathExtension().lastPathComponent
+        for file in files {
+            let isICloud = file.pathExtension == "icloud"
+            let isMD = file.pathExtension == "md"
+            guard isMD || isICloud else { continue }
+
+            var slug = file.deletingPathExtension().lastPathComponent
+            if isICloud {
+                // iCloud placeholders are named like ".filename.md.icloud"
+                if slug.hasPrefix(".") {
+                    slug.removeFirst()
+                }
+                // Now it's "filename.md", we need just "filename"
+                if slug.hasSuffix(".md") {
+                    slug = String(slug.dropLast(3))
+                }
+            }
             slugsOnDisk.insert(slug)
+
+            // Trigger download if needed
+            if isICloud {
+                try? fm.startDownloadingUbiquitousItem(at: file)
+                continue // Can't index until it's a .md file
+            }
+
             let mtime = self.mtime(of: file)
             let indexed: Double = (try? dbQueue.read { db in
                 try Double.fetchOne(
@@ -161,6 +243,7 @@ public final class PromptStore: @unchecked Sendable {
                     arguments: [slug]
                 )
             }) ?? 0
+            
             if mtime > indexed {
                 if let text = try? String(contentsOf: file, encoding: .utf8),
                    let p = try? MarkdownCodec.decode(text, slug: slug) {

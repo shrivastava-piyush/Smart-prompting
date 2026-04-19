@@ -47,44 +47,66 @@ public enum MarkdownCodec {
     }
 
     public static func decode(_ text: String, slug: String) throws -> Prompt {
-        guard text.hasPrefix("---\n") else {
-            throw SmartPromptingError.invalidMarkdown("missing frontmatter opener")
-        }
-        let afterOpen = text.dropFirst(4) // drop "---\n"
-        guard let closeRange = afterOpen.range(of: "\n---\n") else {
-            throw SmartPromptingError.invalidMarkdown("missing frontmatter closer")
-        }
-        let yamlText = String(afterOpen[..<closeRange.lowerBound])
-        let bodyStart = afterOpen.index(closeRange.upperBound, offsetBy: 0)
-        let body = String(afterOpen[bodyStart...])
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Robust frontmatter detection
+        let lines = text.components(separatedBy: .newlines)
+        if lines.first?.trimmingCharacters(in: .whitespaces) == "---" {
+            // Find the second "---"
+            var closerIndex = -1
+            for i in 1..<lines.count {
+                if lines[i].trimmingCharacters(in: .whitespaces) == "---" {
+                    closerIndex = i
+                    break
+                }
+            }
+            
+            if closerIndex != -1 {
+                let yamlLines = lines[1..<closerIndex]
+                let bodyLines = lines[(closerIndex + 1)...]
+                
+                let yamlText = yamlLines.joined(separator: "\n")
+                let body = bodyLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                
+                if let fm = try? Yams.load(yaml: yamlText) as? [String: Any] {
+                    let id = (fm["id"] as? String) ?? UUID().uuidString
+                    let title = (fm["title"] as? String) ?? slug.replacingOccurrences(of: "-", with: " ").capitalized
+                    let tags = (fm["tags"] as? [String]) ?? []
+                    let placeholders = (fm["placeholders"] as? [String]) ?? []
+                    let created = (fm["created"] as? String).flatMap { iso.date(from: $0) } ?? Date()
+                    let updated = (fm["updated"] as? String).flatMap { iso.date(from: $0) } ?? created
+                    let useCount = (fm["use_count"] as? Int) ?? 0
+                    let lastUsed: Date? = {
+                        if let s = fm["last_used"] as? String { return iso.date(from: s) }
+                        return nil
+                    }()
 
-        guard let fm = try Yams.load(yaml: yamlText) as? [String: Any] else {
-            throw SmartPromptingError.invalidMarkdown("frontmatter not a dictionary")
+                    return Prompt(
+                        id: id,
+                        slug: slug,
+                        title: title,
+                        body: body,
+                        tags: tags,
+                        placeholders: placeholders,
+                        created: created,
+                        updated: updated,
+                        useCount: useCount,
+                        lastUsed: lastUsed
+                    )
+                }
+            }
         }
-
-        let id = (fm["id"] as? String) ?? UUID().uuidString
-        let title = (fm["title"] as? String) ?? slug
-        let tags = (fm["tags"] as? [String]) ?? []
-        let placeholders = (fm["placeholders"] as? [String]) ?? []
-        let created = (fm["created"] as? String).flatMap { iso.date(from: $0) } ?? Date()
-        let updated = (fm["updated"] as? String).flatMap { iso.date(from: $0) } ?? created
-        let useCount = (fm["use_count"] as? Int) ?? 0
-        let lastUsed: Date? = {
-            if let s = fm["last_used"] as? String { return iso.date(from: s) }
-            return nil
-        }()
-
+        
+        // Fallback for plain markdown or failed YAML
         return Prompt(
-            id: id,
+            id: UUID().uuidString,
             slug: slug,
-            title: title,
-            body: body,
-            tags: tags,
-            placeholders: placeholders,
-            created: created,
-            updated: updated,
-            useCount: useCount,
-            lastUsed: lastUsed
+            title: slug.replacingOccurrences(of: "-", with: " ").capitalized,
+            body: trimmed,
+            tags: [],
+            placeholders: TemplateEngine.placeholders(in: trimmed),
+            created: Date(),
+            updated: Date()
         )
     }
 }

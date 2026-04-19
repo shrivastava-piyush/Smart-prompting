@@ -3,13 +3,26 @@ import Darwin
 import Foundation
 import SmartPromptingCore
 
+@main
 struct SP: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "sp",
         abstract: "Smart Prompting CLI — save and recall long prompts.",
-        subcommands: [Add.self, Find.self, Use.self, List.self, Edit.self, Remove.self, Doctor.self, SetKey.self],
+        subcommands: [
+            Add.self, Find.self, Use.self, List.self, 
+            Edit.self, Remove.self, Doctor.self, SetKey.self,
+            Config.self
+        ],
         defaultSubcommand: Find.self
     )
+
+    @Option(name: [.short, .long], help: "Override prompts directory for this command.")
+    var dir: String?
+
+    static func spInstance(dirOverride: String?) throws -> SmartPrompting {
+        let url = dirOverride.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
+        return try SmartPrompting(promptsDir: url)
+    }
 
     static func promptUse(sp: SmartPrompting, prompt: Prompt) throws -> String {
         var map: [String: String] = [:]
@@ -23,12 +36,47 @@ struct SP: AsyncParsableCommand {
     }
 }
 
+// MARK: - sp config
+
+struct Config: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Configure CLI settings like the prompts directory."
+    )
+
+    @Option(name: [.short, .long], help: "Set a persistent prompts directory.")
+    var dir: String?
+
+    @Flag(name: [.short, .long], help: "Reset to the default directory.")
+    var reset: Bool = false
+
+    func run() async throws {
+        if reset {
+            ICloudSync.clearUserSelection()
+            print("✓ Reset to default directory.")
+            return
+        }
+
+        if let dir = dir {
+            let url = URL(fileURLWithPath: (dir as NSString).expandingTildeInPath).absoluteURL
+            try ICloudSync.saveBookmark(for: url)
+            print("✓ Prompts directory set to: \(url.path)")
+        } else {
+            let current = try ICloudSync.promptsDirectory()
+            print("Current Prompts Directory: \(current.path)")
+            print("Status: \(ICloudSync.statusMessage)")
+            print("\nTo change it, use: sp config --dir <path>")
+        }
+    }
+}
+
 // MARK: - sp add
 
 struct Add: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Save a new prompt. Reads from --file, stdin, or the clipboard."
     )
+
+    @OptionGroup var globals: SP
 
     @Option(name: [.short, .long], help: "Read prompt body from this file.")
     var file: String?
@@ -44,7 +92,7 @@ struct Add: AsyncParsableCommand {
         guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ValidationError("Empty prompt body.")
         }
-        let sp = try SmartPrompting()
+        let sp = try SP.spInstance(dirOverride: globals.dir)
         let prompt = try await sp.create(from: body, titleHint: title)
         print("Saved: \(prompt.slug)  —  \(prompt.title)")
         if !prompt.tags.isEmpty {
@@ -92,13 +140,15 @@ struct Find: AsyncParsableCommand {
         abstract: "Search prompts. With no query, lists most-recent."
     )
 
+    @OptionGroup var globals: SP
+
     @Argument(parsing: .remaining) var query: [String] = []
     @Option(name: [.short, .long]) var limit: Int = 10
     @Flag(name: [.customShort("n"), .long], help: "Print top hit's body to stdout and exit (no picker).")
     var noInteractive: Bool = false
 
     func run() async throws {
-        let sp = try SmartPrompting()
+        let sp = try SP.spInstance(dirOverride: globals.dir)
         let q = query.joined(separator: " ")
         let hits = try sp.search.query(q, limit: limit)
         if hits.isEmpty {
@@ -133,6 +183,8 @@ struct Use: AsyncParsableCommand {
         abstract: "Render a prompt by slug, filling any placeholders."
     )
 
+    @OptionGroup var globals: SP
+
     @Argument(help: "The slug (filename stem) of the prompt.") var slug: String
     @Option(name: [.customShort("v"), .long],
             parsing: .upToNextOption,
@@ -143,7 +195,7 @@ struct Use: AsyncParsableCommand {
     var printOnly: Bool = false
 
     func run() async throws {
-        let sp = try SmartPrompting()
+        let sp = try SP.spInstance(dirOverride: globals.dir)
         guard let prompt = try sp.store.get(slug: slug) else {
             throw SmartPromptingError.promptNotFound(slug)
         }
@@ -172,10 +224,12 @@ struct List: AsyncParsableCommand {
         abstract: "List prompts, most-recently-used first."
     )
 
+    @OptionGroup var globals: SP
+
     @Option(name: [.customShort("t"), .long]) var tag: String?
 
     func run() async throws {
-        let sp = try SmartPrompting()
+        let sp = try SP.spInstance(dirOverride: globals.dir)
         let prompts = tag.map { try? sp.store.byTag($0) } ?? (try? sp.store.all())
         let list = prompts ?? []
         if list.isEmpty {
@@ -197,10 +251,12 @@ struct Edit: AsyncParsableCommand {
         abstract: "Open a prompt's markdown file in $EDITOR."
     )
 
+    @OptionGroup var globals: SP
+
     @Argument var slug: String
 
     func run() async throws {
-        let sp = try SmartPrompting()
+        let sp = try SP.spInstance(dirOverride: globals.dir)
         let url = sp.store.promptsDir.appendingPathComponent("\(slug).md")
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw SmartPromptingError.promptNotFound(slug)
@@ -224,11 +280,13 @@ struct Remove: AsyncParsableCommand {
         abstract: "Delete a prompt."
     )
 
+    @OptionGroup var globals: SP
+
     @Argument var slug: String
     @Flag(name: [.customShort("f"), .long]) var force: Bool = false
 
     func run() async throws {
-        let sp = try SmartPrompting()
+        let sp = try SP.spInstance(dirOverride: globals.dir)
         guard try sp.store.get(slug: slug) != nil else {
             throw SmartPromptingError.promptNotFound(slug)
         }
@@ -248,11 +306,13 @@ struct Doctor: AsyncParsableCommand {
         abstract: "Diagnose setup: iCloud status, storage path, embedding model, API key."
     )
 
+    @OptionGroup var globals: SP
+
     func run() async throws {
-        let sp = try SmartPrompting()
+        let sp = try SP.spInstance(dirOverride: globals.dir)
 
         // iCloud status — the most important check
-        let syncStatus = ICloudSync.status()
+        let syncStatus = ICloudSync.status(overridingDir: sp.store.promptsDir)
         switch syncStatus {
         case .syncing(let path):
             print("iCloud Drive:      ✓ signed in & syncing")
@@ -289,6 +349,8 @@ struct SetKey: AsyncParsableCommand {
         abstract: "Store an ANTHROPIC_API_KEY in the Keychain for AutoTag."
     )
 
+    @OptionGroup var globals: SP
+
     @Argument(help: "The API key. Omit to clear.") var key: String?
 
     func run() async throws {
@@ -305,5 +367,3 @@ struct SetKey: AsyncParsableCommand {
         }
     }
 }
-
-SP.main()

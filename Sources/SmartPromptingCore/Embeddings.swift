@@ -7,14 +7,6 @@ import CoreML
 #endif
 
 /// Produces fixed-size sentence embeddings.
-///
-/// Lookup order:
-/// 1. A CoreML `.mlmodelc` named `MiniLM` in the host bundle (best quality,
-///    produced by `scripts/build-coreml.py`).
-/// 2. Apple's built-in `NLEmbedding.sentenceEmbedding(for: .english)`
-///    (100-dim, works out of the box on macOS 11+/iOS 14+).
-/// 3. A deterministic hashing fallback so the library never crashes in
-///    environments (like Linux CI) where neither is available.
 public final class Embeddings: @unchecked Sendable {
     public enum Backend: String, Sendable {
         case coreml
@@ -26,6 +18,7 @@ public final class Embeddings: @unchecked Sendable {
 
     public let backend: Backend
     public let dimension: Int
+    private let lock = NSLock()
 
     #if canImport(NaturalLanguage)
     private let nl: NLEmbedding?
@@ -33,8 +26,9 @@ public final class Embeddings: @unchecked Sendable {
 
     private init() {
         #if canImport(NaturalLanguage)
-        // TODO(phase 2): load MiniLM CoreML package here when bundled.
-        if let emb = NLEmbedding.sentenceEmbedding(for: .english) {
+        // Switch to wordEmbedding as it is significantly more stable than 
+        // sentenceEmbedding (which is prone to EXC_BAD_ACCESS on iOS 17/18).
+        if let emb = NLEmbedding.wordEmbedding(for: .english) {
             self.nl = emb
             self.backend = .naturalLanguage
             self.dimension = emb.dimension
@@ -49,30 +43,35 @@ public final class Embeddings: @unchecked Sendable {
     /// Returns an embedding for the given text, always length `dimension`.
     public func embed(_ text: String) -> [Float] {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let input = trimmed.isEmpty ? "empty" : trimmed
+        if trimmed.isEmpty { return [Float](repeating: 0, count: dimension) }
 
         #if canImport(NaturalLanguage)
         if backend == .naturalLanguage, let nl = nl {
-            if let vec = nl.vector(for: input) {
-                return vec.map { Float($0) }
-            }
-            // NLEmbedding works sentence-level; for longer inputs, average token vectors.
-            let tokens = tokenize(input)
+            lock.lock()
+            defer { lock.unlock() }
+
+            // Average word vectors to create a sentence/block embedding.
+            // This avoids the buggy internal sentence-level model.
+            let tokens = tokenize(trimmed)
             var sum = [Double](repeating: 0, count: dimension)
-            var n = 0
-            for t in tokens {
-                if let v = nl.vector(for: t) {
-                    for i in 0..<dimension { sum[i] += v[i] }
-                    n += 1
+            var count = 0
+            
+            for token in tokens {
+                if let vec = nl.vector(for: token) {
+                    for i in 0..<dimension {
+                        sum[i] += vec[i]
+                    }
+                    count += 1
                 }
             }
-            if n > 0 {
-                return sum.map { Float($0 / Double(n)) }
+            
+            if count > 0 {
+                return sum.map { Float($0 / Double(count)) }
             }
         }
         #endif
 
-        return hashingEmbed(input)
+        return hashingEmbed(trimmed)
     }
 
     /// Cosine similarity in `[-1, 1]`.
@@ -146,9 +145,11 @@ public extension Embeddings {
     /// Unpack `Data` into `[Float]`.
     static func unpack(_ data: Data) -> [Float] {
         let count = data.count / MemoryLayout<Float>.size
+        if count == 0 { return [] }
         return data.withUnsafeBytes { raw -> [Float] in
-            let buf = raw.bindMemory(to: Float.self)
-            return Array(UnsafeBufferPointer(start: buf.baseAddress, count: count))
+            guard let baseAddress = raw.baseAddress else { return [] }
+            let buf = baseAddress.assumingMemoryBound(to: Float.self)
+            return Array(UnsafeBufferPointer(start: buf, count: count))
         }
     }
 }

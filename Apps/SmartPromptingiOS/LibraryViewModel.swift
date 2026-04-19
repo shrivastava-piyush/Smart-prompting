@@ -11,11 +11,114 @@ final class LibraryViewModel: ObservableObject {
     @Published var iCloudSyncing: Bool = false
     @Published var iCloudMessage: String = ""
 
-    private let sp: SmartPrompting?
+    private var sp: SmartPrompting?
+    private var refreshTimer: Timer?
+    
+    private final class WatcherState {
+        var watcher: DispatchSourceFileSystemObject?
+        var descriptor: Int32 = -1
+        
+        func stop() {
+            watcher?.cancel()
+            watcher = nil
+            if descriptor != -1 {
+                close(descriptor)
+                descriptor = -1
+            }
+        }
+    }
+    
+    private let watcherState = WatcherState()
 
     init() {
         self.sp = try? SmartPrompting()
         checkICloudStatus()
+        setupWatcher()
+        startTimer()
+    }
+
+    deinit {
+        watcherState.stop()
+        refreshTimer?.invalidate()
+    }
+
+    func selectDirectory(_ url: URL) {
+        // Essential for user-selected folders
+        guard url.startAccessingSecurityScopedResource() else {
+            toast = "Permission denied for this folder."
+            return
+        }
+        
+        do {
+            try ICloudSync.saveBookmark(for: url)
+            watcherState.stop()
+            // Re-initialize with the new directory
+            self.sp = try SmartPrompting()
+            setupWatcher()
+            refresh()
+            toast = "Syncing with selected folder"
+        } catch {
+            toast = "Failed to select directory: \(error.localizedDescription)"
+        }
+    }
+
+    func resetDirectory() {
+        ICloudSync.clearUserSelection()
+        watcherState.stop()
+        self.sp = try? SmartPrompting()
+        setupWatcher()
+        refresh()
+        toast = "Reset to default local storage"
+    }
+
+    func forceSync() {
+        guard let sp = sp else { return }
+        toast = "Re-indexing..."
+        // Wipe local index and rebuild
+        try? FileManager.default.removeItem(at: sp.store.dbURL)
+        do {
+            // Re-initialize store
+            self.sp = try SmartPrompting()
+            refresh()
+            toast = "Re-indexed \(allPrompts.count) prompts"
+        } catch {
+            toast = "Re-index failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func startTimer() {
+        refreshTimer?.invalidate()
+        // Poll every 10 seconds to catch iCloud syncs that watchers might miss
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.refresh()
+            }
+        }
+    }
+
+    private func setupWatcher() {
+        guard let url = sp?.store.promptsDir else { return }
+        
+        watcherState.stop()
+        
+        let fd = open(url.path, O_EVTONLY)
+        guard fd != -1 else { return }
+        watcherState.descriptor = fd
+        
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: .write,
+            queue: DispatchQueue.global()
+        )
+        
+        source.setEventHandler { [weak self] in
+            Task { @MainActor in
+                self?.refresh()
+            }
+        }
+        
+        source.resume()
+        watcherState.watcher = source
     }
 
     func checkICloudStatus() {
@@ -32,9 +135,17 @@ final class LibraryViewModel: ObservableObject {
 
     func refresh() {
         guard let sp = sp else { return }
+        ICloudSync.triggerDownloads()
         try? sp.store.syncIndexFromDisk()
-        allPrompts = (try? sp.store.all()) ?? []
-        search()
+        
+        let fetched = (try? sp.store.all()) ?? []
+        // More robust comparison to trigger UI update
+        if fetched.count != allPrompts.count || 
+           fetched.map(\.id) != allPrompts.map(\.id) ||
+           fetched.map(\.updated) != allPrompts.map(\.updated) {
+            allPrompts = fetched
+            search()
+        }
         checkICloudStatus()
     }
 
@@ -62,13 +173,23 @@ final class LibraryViewModel: ObservableObject {
     }
 
     func delete(_ prompt: Prompt) {
-        try? sp?.store.delete(slug: prompt.slug)
-        refresh()
+        do {
+            try sp?.store.delete(slug: prompt.slug)
+            refresh()
+            toast = "Deleted: \(prompt.title)"
+        } catch {
+            toast = "Delete failed: \(error.localizedDescription)"
+        }
     }
 
     func add(title: String, body: String) async {
         guard let sp = sp, !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        _ = try? await sp.create(from: body, titleHint: title)
-        refresh()
+        do {
+            _ = try await sp.create(from: body, titleHint: title)
+            refresh()
+            toast = "Saved: \(title)"
+        } catch {
+            toast = "Save failed: \(error.localizedDescription)"
+        }
     }
 }

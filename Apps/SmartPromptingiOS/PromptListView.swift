@@ -1,19 +1,17 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import SmartPromptingCore
 
 struct PromptListView: View {
     @ObservedObject var vm: LibraryViewModel
     @State private var selected: Prompt?
     @State private var showAdd = false
+    @State private var showFolderPicker = false
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                LazyVStack(spacing: 16) {
-                    if !vm.iCloudSyncing {
-                        iCloudBanner
-                    }
-
+                LazyVStack(spacing: 12) {
                     if vm.results.isEmpty {
                         emptyState
                     } else {
@@ -32,19 +30,44 @@ struct PromptListView: View {
                         }
                     }
                 }
-                .padding()
+                .padding(.horizontal)
+                .padding(.top, 16)
             }
-            .background(Color(.systemGroupedBackground))
-            .searchable(text: $vm.query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search Library")
+            .background(Color(uiColor: .systemGroupedBackground))
+            .searchable(text: $vm.query, placement: .automatic, prompt: "Search")
             .onChange(of: vm.query) { _, _ in vm.search() }
             .refreshable { vm.refresh() }
-            .navigationTitle("Prompts")
+            .navigationTitle("Library")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showAdd = true } label: {
-                        Image(systemName: "plus.circle.fill")
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    // Sync Status / Settings Menu
+                    Menu {
+                        Section("Sync Settings") {
+                            Button { showFolderPicker = true } label: {
+                                Label("Change Sync Folder", systemImage: "folder.badge.gearshape")
+                            }
+                            Button { vm.forceSync() } label: {
+                                Label("Force Re-index", systemImage: "arrow.triangle.2.circlepath")
+                            }
+                            Button(role: .destructive) { vm.resetDirectory() } label: {
+                                Label("Reset to Local Only", systemImage: "arrow.counterclockwise")
+                            }
+                        }
+                        
+                        Section("Status") {
+                            Text(vm.iCloudSyncing ? "iCloud Sync Active" : "Local Storage Only")
+                        }
+                    } label: {
+                        Image(systemName: vm.iCloudSyncing ? "icloud.fill" : "icloud")
                             .symbolRenderingMode(.hierarchical)
-                            .font(.title2)
+                            .foregroundStyle(vm.iCloudSyncing ? Color.accentColor : Color.secondary)
+                    }
+
+                    // Add Prompt
+                    Button { showAdd = true } label: {
+                        Image(systemName: "plus")
+                            .fontWeight(.semibold)
                     }
                 }
             }
@@ -67,46 +90,65 @@ struct PromptListView: View {
                     toastBanner
                 }
             }
+            .fileImporter(
+                isPresented: $showFolderPicker,
+                allowedContentTypes: [.folder],
+                allowsMultipleSelection: false
+            ) { result in
+                switch result {
+                case .success(let urls):
+                    if let url = urls.first {
+                        vm.selectDirectory(url)
+                    }
+                case .failure(let error):
+                    vm.toast = error.localizedDescription
+                }
+            }
         }
-    }
-
-    private var iCloudBanner: some View {
-        HStack {
-            Label("iCloud Sync Off", systemImage: "icloud.slash")
-                .font(.subheadline.bold())
-                .foregroundStyle(.orange)
-            Spacer()
-            Image(systemName: "chevron.right")
-                .font(.caption2.bold())
-                .foregroundStyle(.orange.opacity(0.5))
-        }
-        .padding()
-        .background(Color.orange.opacity(0.1))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     private var emptyState: some View {
-        VStack(spacing: 12) {
-            Spacer().frame(height: 80)
+        VStack(spacing: 24) {
+            Spacer().frame(height: 100)
+            
             Image(systemName: "doc.text.magnifyingglass")
-                .font(.system(size: 60))
+                .font(.system(size: 72, weight: .thin))
                 .foregroundStyle(.quaternary)
-            Text("No Prompts Found")
-                .font(.headline)
-            Text("Your library is empty or matches nothing.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            
+            VStack(spacing: 8) {
+                Text("No Prompts Found")
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                Text("Add your first prompt or select an iCloud folder to sync an existing library.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 48)
+            }
+            
+            Button {
+                showFolderPicker = true
+            } label: {
+                Text("Sync with iCloud Folder")
+                    .fontWeight(.semibold)
+                    .padding(.horizontal, 28)
+                    .padding(.vertical, 14)
+                    .background(Color.accentColor)
+                    .foregroundStyle(.white)
+                    .clipShape(Capsule())
+            }
         }
     }
 
     private var toastBanner: some View {
         Text(vm.toast)
             .font(.footnote.bold())
-            .foregroundStyle(.white)
+            .foregroundStyle(Color(uiColor: .systemBackground))
             .padding(.horizontal, 16)
-            .padding(.vertical, 10)
+            .padding(.vertical, 12)
             .background(Capsule().fill(Color.primary))
-            .padding(.bottom, 20)
+            .padding(.bottom, 24)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 }
 
@@ -117,50 +159,51 @@ struct PromptCard: View {
     var body: some View {
         Button(action: onTap) {
             VStack(alignment: .leading, spacing: 12) {
-                // Category/Title Header
-                HStack {
-                    Text(prompt.title.uppercased())
-                        .font(.caption2.bold())
-                        .foregroundStyle(.secondary)
-                        .tracking(1)
-                    
-                    Spacer()
-                    
-                    if !prompt.placeholders.isEmpty {
-                        Image(systemName: "variable")
-                            .font(.caption2.bold())
-                            .foregroundStyle(.orange)
-                    }
-                }
-
-                // Main Content
-                Text(prompt.body)
-                    .font(.body)
-                    .foregroundStyle(.primary)
-                    .lineLimit(3)
-                    .multilineTextAlignment(.leading)
-
-                // Footer
-                HStack(spacing: 8) {
-                    if !prompt.tags.isEmpty {
-                        ForEach(prompt.tags.prefix(2), id: \.self) { tag in
-                            Text("#\(tag)")
-                                .font(.caption2.bold())
-                                .foregroundStyle(Color.accentColor)
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(prompt.title)
+                            .font(.system(.subheadline, design: .rounded, weight: .bold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        
+                        if !prompt.tags.isEmpty {
+                            HStack(spacing: 6) {
+                                ForEach(prompt.tags.prefix(3), id: \.self) { tag in
+                                    Text(tag)
+                                        .font(.system(size: 10, weight: .medium))
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 2)
+                                        .background(Color.accentColor.opacity(0.12))
+                                        .foregroundStyle(Color.accentColor)
+                                        .clipShape(Capsule())
+                                }
+                            }
                         }
                     }
                     
                     Spacer()
                     
-                    Label("\(prompt.useCount)", systemImage: "bolt.fill")
-                        .font(.caption2.bold())
-                        .foregroundStyle(.secondary)
+                    if !prompt.placeholders.isEmpty {
+                        Image(systemName: "sparkles")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
                 }
+
+                Text(prompt.body)
+                    .font(.system(.caption, design: .default))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(16)
-            .background(Color(.secondarySystemGroupedBackground))
+            .background(Color(uiColor: .secondarySystemGroupedBackground))
             .clipShape(RoundedRectangle(cornerRadius: 16))
-            .shadow(color: .black.opacity(0.05), radius: 5, x: 0, y: 2)
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+            )
         }
         .buttonStyle(PlainButtonStyle())
     }
@@ -176,10 +219,9 @@ struct PromptDetailView: View {
         NavigationStack {
             Form {
                 Section {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(prompt.title.uppercased())
-                            .font(.caption2.bold())
-                            .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(prompt.title)
+                            .font(.headline)
                         Text(prompt.body)
                             .font(.body)
                     }
@@ -187,7 +229,7 @@ struct PromptDetailView: View {
                 }
 
                 if !prompt.placeholders.isEmpty {
-                    Section("Inputs") {
+                    Section("Required Inputs") {
                         ForEach(prompt.placeholders, id: \.self) { name in
                             TextField(name, text: Binding(
                                 get: { values[name] ?? "" },
@@ -208,11 +250,11 @@ struct PromptDetailView: View {
                     .foregroundStyle(.white)
                 }
             }
-            .navigationTitle("Use Prompt")
+            .navigationTitle("Prompt Details")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Close") { dismiss() }
                 }
             }
         }
@@ -228,18 +270,13 @@ struct AddPromptView: View {
     var body: some View {
         NavigationStack {
             Form {
-                TextField("Identifier (e.g. Code Review)", text: $title)
-                    .font(.headline)
+                Section("Title") {
+                    TextField("Enter title...", text: $title)
+                }
                 
-                ZStack(alignment: .topLeading) {
-                    if promptBody.isEmpty {
-                        Text("Paste your prompt content here...")
-                            .foregroundStyle(.placeholder)
-                            .padding(.top, 8)
-                            .padding(.leading, 5)
-                    }
+                Section("Body") {
                     TextEditor(text: $promptBody)
-                        .frame(minHeight: 300)
+                        .frame(minHeight: 250)
                 }
             }
             .navigationTitle("New Prompt")
