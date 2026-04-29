@@ -1,16 +1,24 @@
 import UIKit
 import SmartPromptingCore
 
-/// Custom keyboard that provides prompt search and one-tap insertion into any
-/// text field on iOS. Appears as "Smart Prompting" in Settings → General →
-/// Keyboard → Keyboards → Add New Keyboard.
+/// Custom keyboard with two modes:
+/// 1. **Browse** — search bar + results list, tap to insert.
+/// 2. **Keyword trigger** — type `-slug` followed by a space in any text field
+///    and the slug auto-expands to the full prompt body. Works like TextExpander.
+///
+/// Appears as "Smart Prompting" in Settings → General → Keyboard → Keyboards.
 class KeyboardViewController: UIInputViewController {
     private var searchField: UITextField!
     private var tableView: UITableView!
+    private var triggerHintLabel: UILabel!
     private var results: [ScoredPrompt] = []
     private var sp: SmartPrompting?
     private var emptyLabel: UILabel!
     private var nextKeyboardButton: UIButton!
+
+    // Keyword trigger state: tracks chars typed since last `-` prefix.
+    private var triggerBuffer: String = ""
+    private var trackingTrigger = false
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -31,7 +39,7 @@ class KeyboardViewController: UIInputViewController {
 
         searchField = UITextField()
         searchField.translatesAutoresizingMaskIntoConstraints = false
-        searchField.placeholder = "Search prompts…"
+        searchField.placeholder = "Search, or type -slug in any app..."
         searchField.borderStyle = .roundedRect
         searchField.font = .systemFont(ofSize: 15)
         searchField.clearButtonMode = .whileEditing
@@ -45,6 +53,15 @@ class KeyboardViewController: UIInputViewController {
         nextKeyboardButton.addTarget(self, action: #selector(handleInputModeList(from:with:)), for: .allTouchEvents)
         topBar.addSubview(nextKeyboardButton)
 
+        // Trigger hint bar (shows when -slug is being typed)
+        triggerHintLabel = UILabel()
+        triggerHintLabel.translatesAutoresizingMaskIntoConstraints = false
+        triggerHintLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        triggerHintLabel.textColor = .systemOrange
+        triggerHintLabel.textAlignment = .center
+        triggerHintLabel.isHidden = true
+        view.addSubview(triggerHintLabel)
+
         // Results table
         tableView = UITableView()
         tableView.translatesAutoresizingMaskIntoConstraints = false
@@ -56,7 +73,6 @@ class KeyboardViewController: UIInputViewController {
         tableView.estimatedRowHeight = 72
         view.addSubview(tableView)
 
-        // Empty state
         emptyLabel = UILabel()
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
         emptyLabel.text = "No prompts yet.\nSave some with the Smart Prompting app."
@@ -82,7 +98,12 @@ class KeyboardViewController: UIInputViewController {
             searchField.centerYAnchor.constraint(equalTo: topBar.centerYAnchor),
             searchField.heightAnchor.constraint(equalToConstant: 36),
 
-            tableView.topAnchor.constraint(equalTo: topBar.bottomAnchor, constant: 4),
+            triggerHintLabel.topAnchor.constraint(equalTo: topBar.bottomAnchor, constant: 2),
+            triggerHintLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
+            triggerHintLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
+            triggerHintLabel.heightAnchor.constraint(equalToConstant: 24),
+
+            tableView.topAnchor.constraint(equalTo: triggerHintLabel.bottomAnchor, constant: 2),
             tableView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             tableView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             tableView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -90,6 +111,72 @@ class KeyboardViewController: UIInputViewController {
             emptyLabel.centerXAnchor.constraint(equalTo: tableView.centerXAnchor),
             emptyLabel.centerYAnchor.constraint(equalTo: tableView.centerYAnchor),
         ])
+    }
+
+    // MARK: - Keyword trigger detection
+
+    override func textDidChange(_ textInput: UITextInput?) {
+        super.textDidChange(textInput)
+        detectTrigger()
+    }
+
+    private func detectTrigger() {
+        guard let proxy = textDocumentProxy as? UITextDocumentProxy else { return }
+        guard let before = proxy.documentContextBeforeInput else {
+            resetTrigger()
+            return
+        }
+
+        // Look for a `-` followed by word characters at the end of the text.
+        // Pattern: whitespace or start-of-string, then `-someSlug`
+        let pattern = #"(?:^|\s)-([a-zA-Z][a-zA-Z0-9_-]*)$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(
+                in: before,
+                range: NSRange(before.startIndex..<before.endIndex, in: before)
+              ),
+              match.numberOfRanges >= 2,
+              let slugRange = Range(match.range(at: 1), in: before) else {
+            resetTrigger()
+            return
+        }
+
+        let slug = String(before[slugRange])
+        trackingTrigger = true
+        triggerBuffer = slug
+
+        if let prompt = try? sp?.store.get(slug: slug) {
+            triggerHintLabel.text = "⚡ Press space to expand: \(prompt.title)"
+            triggerHintLabel.isHidden = false
+        } else {
+            // Partial match — show what's being typed
+            triggerHintLabel.text = "Typing trigger: -\(slug)..."
+            triggerHintLabel.isHidden = false
+        }
+    }
+
+    private func resetTrigger() {
+        trackingTrigger = false
+        triggerBuffer = ""
+        triggerHintLabel.isHidden = true
+    }
+
+    /// Called when space is pressed after a trigger slug. Deletes `-slug ` and
+    /// inserts the prompt body.
+    private func expandTrigger(_ slug: String) {
+        guard let prompt = try? sp?.store.get(slug: slug) else { return }
+
+        // Delete the `-slug ` that was just typed (slug.count + 2: dash + space)
+        let charsToDelete = slug.count + 2
+        for _ in 0..<charsToDelete {
+            textDocumentProxy.deleteBackward()
+        }
+
+        // Render with system variables auto-resolved
+        let rendered = (try? TemplateEngine.render(prompt.body, with: [:])) ?? prompt.body
+        textDocumentProxy.insertText(rendered)
+        try? sp?.store.recordUse(prompt)
+        resetTrigger()
     }
 
     // MARK: - Search
@@ -117,22 +204,14 @@ class KeyboardViewController: UIInputViewController {
     // MARK: - Insertion
 
     private func insertPrompt(_ prompt: Prompt) {
-        let body = prompt.body
-        if prompt.placeholders.isEmpty {
-            textDocumentProxy.insertText(body)
-            try? sp?.store.recordUse(prompt)
-        } else {
-            // For prompts with placeholders, insert the raw body with
-            // placeholders visible so the user can fill them manually.
-            textDocumentProxy.insertText(body)
-            try? sp?.store.recordUse(prompt)
-        }
+        let rendered = (try? TemplateEngine.render(prompt.body, with: [:])) ?? prompt.body
+        textDocumentProxy.insertText(rendered)
+        try? sp?.store.recordUse(prompt)
     }
 
     override func viewWillLayoutSubviews() {
         super.viewWillLayoutSubviews()
-        // Request a height that fits the search bar + a few results.
-        let preferred: CGFloat = 260
+        let preferred: CGFloat = 280
         if view.frame.height < preferred {
             let constraint = view.heightAnchor.constraint(equalToConstant: preferred)
             constraint.priority = .defaultHigh
@@ -156,7 +235,14 @@ extension KeyboardViewController: UITableViewDataSource, UITableViewDelegate {
 
     func tableView(_ tv: UITableView, didSelectRowAt indexPath: IndexPath) {
         tv.deselectRow(at: indexPath, animated: true)
-        insertPrompt(results[indexPath.row].prompt)
+        let prompt = results[indexPath.row].prompt
+
+        // Check if trigger is active for this slug
+        if trackingTrigger && triggerBuffer == prompt.slug {
+            expandTrigger(prompt.slug)
+        } else {
+            insertPrompt(prompt)
+        }
     }
 }
 

@@ -53,6 +53,18 @@ public struct ScoredPrompt: Sendable {
     }
 }
 
+public struct PromptVersion: Sendable {
+    public let version: Int
+    public let date: Date
+    public let prompt: Prompt?
+
+    public init(version: Int, date: Date, prompt: Prompt?) {
+        self.version = version
+        self.date = date
+        self.prompt = prompt
+    }
+}
+
 public enum SmartPromptingError: Error, LocalizedError {
     case promptNotFound(String)
     case missingPlaceholder(String)

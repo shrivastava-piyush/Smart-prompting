@@ -8,7 +8,7 @@ struct SP: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "sp",
         abstract: "Smart Prompting CLI — save and recall long prompts.",
-        subcommands: [Add.self, Find.self, Use.self, List.self, Edit.self, Remove.self, Doctor.self, SetKey.self],
+        subcommands: [Add.self, Find.self, Use.self, List.self, Edit.self, Remove.self, History.self, Rollback.self, Stats.self, Doctor.self, SetKey.self],
         defaultSubcommand: Find.self
     )
 }
@@ -143,7 +143,7 @@ struct Use: AsyncParsableCommand {
                 map[String(kv[..<eq])] = String(kv[kv.index(after: eq)...])
             }
         }
-        for name in prompt.placeholders where map[name] == nil {
+        for name in TemplateEngine.userPlaceholders(in: prompt.body) where map[name] == nil {
             FileHandle.standardError.write(Data("\(name): ".utf8))
             map[name] = readLine() ?? ""
         }
@@ -296,11 +296,158 @@ struct SetKey: AsyncParsableCommand {
     }
 }
 
+// MARK: - sp history
+
+struct History: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "history",
+        abstract: "Show version history for a prompt."
+    )
+
+    @Argument(help: "The slug of the prompt.") var slug: String
+
+    @Flag(name: [.customShort("b"), .long], help: "Print the body of a specific version.")
+    var showBody: Bool = false
+
+    @Option(name: [.customShort("v"), .long], help: "Version number to inspect.")
+    var version: Int?
+
+    func run() async throws {
+        let sp = try SmartPrompting()
+        guard try sp.store.get(slug: slug) != nil else {
+            throw SmartPromptingError.promptNotFound(slug)
+        }
+        let versions = try sp.store.versions(of: slug)
+        if versions.isEmpty {
+            print("No version history for \(slug). History is created on each edit.")
+            return
+        }
+
+        if let v = version {
+            guard let entry = versions.first(where: { $0.version == v }) else {
+                throw SmartPromptingError.promptNotFound("\(slug) version \(v)")
+            }
+            let df = DateFormatter()
+            df.dateStyle = .medium
+            df.timeStyle = .short
+            print("Version \(entry.version)  —  \(df.string(from: entry.date))")
+            if showBody, let p = entry.prompt {
+                print("---")
+                print(p.body)
+            } else if let p = entry.prompt {
+                print("Title: \(p.title)")
+                print("Body:  \(String(p.body.prefix(120)))...")
+                print("(use --show-body to see full text)")
+            }
+            return
+        }
+
+        let df = DateFormatter()
+        df.dateStyle = .medium
+        df.timeStyle = .short
+        print("History for \(slug) (\(versions.count) version\(versions.count == 1 ? "" : "s")):\n")
+        for entry in versions {
+            let title = entry.prompt?.title ?? "—"
+            let bodyPreview = entry.prompt.map { String($0.body.prefix(60)) } ?? ""
+            print("  v\(String(format: "%3d", entry.version))  \(df.string(from: entry.date))  \(title)")
+            if !bodyPreview.isEmpty {
+                print("        \(bodyPreview)...")
+            }
+        }
+        print("\nRollback: sp rollback \(slug) <version>")
+    }
+}
+
+// MARK: - sp rollback
+
+struct Rollback: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "rollback",
+        abstract: "Restore a prompt to a previous version."
+    )
+
+    @Argument(help: "The slug of the prompt.") var slug: String
+    @Argument(help: "Version number to restore.") var version: Int
+
+    @Flag(name: [.customShort("f"), .long]) var force: Bool = false
+
+    func run() async throws {
+        let sp = try SmartPrompting()
+        guard try sp.store.get(slug: slug) != nil else {
+            throw SmartPromptingError.promptNotFound(slug)
+        }
+        let versions = try sp.store.versions(of: slug)
+        guard versions.contains(where: { $0.version == version }) else {
+            throw SmartPromptingError.promptNotFound("\(slug) version \(version)")
+        }
+        if !force {
+            FileHandle.standardError.write(Data("Rollback \(slug) to version \(version)? Current version will be saved to history. [y/N] ".utf8))
+            guard (readLine() ?? "").lowercased().hasPrefix("y") else { return }
+        }
+        let restored = try sp.store.rollback(slug: slug, to: version)
+        print("Restored \(slug) to version \(version).")
+        print("Title: \(restored.title)")
+    }
+}
+
+// MARK: - sp stats
+
+struct Stats: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "stats",
+        abstract: "Show usage analytics for your prompt library."
+    )
+
+    @Option(name: [.short, .long], help: "Number of top items to show.")
+    var top: Int = 10
+
+    func run() async throws {
+        let sp = try SmartPrompting()
+        let s = try sp.store.stats(topN: top)
+
+        print("=== Smart Prompting Stats ===\n")
+        print("Total prompts:  \(s.totalPrompts)")
+        print("Total uses:     \(s.totalUses)")
+        print("Never used:     \(s.unusedCount)")
+
+        if s.totalPrompts > 0 {
+            let avgUses = Double(s.totalUses) / Double(s.totalPrompts)
+            print("Avg uses/prompt: \(String(format: "%.1f", avgUses))")
+        }
+
+        if !s.topByUse.isEmpty {
+            print("\n--- Most Used ---")
+            for (i, item) in s.topByUse.enumerated() {
+                let bar = String(repeating: "█", count: min(item.uses, 30))
+                print("\(String(format: "%2d", i + 1)). \(item.prompt.slug.padding(toLength: 30, withPad: " ", startingAt: 0))  \(String(format: "%4d", item.uses))x  \(bar)")
+            }
+        }
+
+        if !s.recentlyUsed.isEmpty {
+            let df = DateFormatter()
+            df.dateStyle = .medium
+            df.timeStyle = .short
+            print("\n--- Recently Used ---")
+            for item in s.recentlyUsed {
+                print("  \(item.prompt.slug.padding(toLength: 30, withPad: " ", startingAt: 0))  \(df.string(from: item.lastUsed))")
+            }
+        }
+
+        if !s.tagDistribution.isEmpty {
+            print("\n--- Tag Distribution ---")
+            for item in s.tagDistribution.prefix(20) {
+                let bar = String(repeating: "▪", count: min(item.count, 30))
+                print("  \(item.tag.padding(toLength: 20, withPad: " ", startingAt: 0))  \(String(format: "%3d", item.count))  \(bar)")
+            }
+        }
+    }
+}
+
 // MARK: - helpers
 
 func promptUse(sp: SmartPrompting, prompt: Prompt) throws -> String {
     var map: [String: String] = [:]
-    for name in prompt.placeholders {
+    for name in TemplateEngine.userPlaceholders(in: prompt.body) {
         FileHandle.standardError.write(Data("\(name): ".utf8))
         map[name] = readLine() ?? ""
     }

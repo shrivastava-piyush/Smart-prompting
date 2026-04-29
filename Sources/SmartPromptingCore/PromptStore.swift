@@ -77,12 +77,19 @@ public final class PromptStore: @unchecked Sendable {
     }
 
     /// Overwrite an existing prompt. The slug is preserved.
+    /// Automatically saves the previous version before overwriting.
     @discardableResult
     public func update(_ prompt: Prompt) throws -> Prompt {
         var p = prompt
         p.placeholders = TemplateEngine.placeholders(in: p.body)
         p.updated = Date()
         let url = fileURL(for: p.slug)
+
+        // Save previous version before overwriting
+        if FileManager.default.fileExists(atPath: url.path) {
+            try saveVersion(slug: p.slug)
+        }
+
         let text = try MarkdownCodec.encode(p)
         try text.write(to: url, atomically: true, encoding: .utf8)
         try upsertIndex(p, fileMTime: mtime(of: url))
@@ -213,6 +220,135 @@ public final class PromptStore: @unchecked Sendable {
                 return (slug: slug, vector: Embeddings.unpack(data))
             }
         }
+    }
+
+    // MARK: - Version history
+
+    private var versionsDir: URL {
+        promptsDir.appendingPathComponent(".versions")
+    }
+
+    private func versionDir(for slug: String) -> URL {
+        versionsDir.appendingPathComponent(slug)
+    }
+
+    private func saveVersion(slug: String) throws {
+        let url = fileURL(for: slug)
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        let dir = versionDir(for: slug)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let next = nextVersionNumber(for: slug)
+        let dest = dir.appendingPathComponent("v\(next).md")
+        try FileManager.default.copyItem(at: url, to: dest)
+    }
+
+    private func nextVersionNumber(for slug: String) -> Int {
+        let dir = versionDir(for: slug)
+        guard let files = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else {
+            return 1
+        }
+        let nums = files.compactMap { name -> Int? in
+            guard name.hasPrefix("v"), name.hasSuffix(".md") else { return nil }
+            let stem = name.dropFirst(1).dropLast(3)
+            return Int(stem)
+        }
+        return (nums.max() ?? 0) + 1
+    }
+
+    /// List all saved versions for a slug, newest first.
+    public func versions(of slug: String) throws -> [PromptVersion] {
+        let dir = versionDir(for: slug)
+        guard FileManager.default.fileExists(atPath: dir.path) else { return [] }
+        let files = try FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.contentModificationDateKey]
+        )
+        return files.compactMap { url -> PromptVersion? in
+            let name = url.deletingPathExtension().lastPathComponent
+            guard name.hasPrefix("v"), let num = Int(name.dropFirst(1)) else { return nil }
+            let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+            let date = (attrs?[.modificationDate] as? Date) ?? Date()
+            let text = try? String(contentsOf: url, encoding: .utf8)
+            let prompt = text.flatMap { try? MarkdownCodec.decode($0, slug: slug) }
+            return PromptVersion(version: num, date: date, prompt: prompt)
+        }
+        .sorted { $0.version > $1.version }
+    }
+
+    /// Restore a specific version, making it the current prompt.
+    @discardableResult
+    public func rollback(slug: String, to version: Int) throws -> Prompt {
+        let dir = versionDir(for: slug)
+        let src = dir.appendingPathComponent("v\(version).md")
+        guard FileManager.default.fileExists(atPath: src.path) else {
+            throw SmartPromptingError.promptNotFound("\(slug) version \(version)")
+        }
+        let text = try String(contentsOf: src, encoding: .utf8)
+        guard var prompt = try? MarkdownCodec.decode(text, slug: slug) else {
+            throw SmartPromptingError.invalidMarkdown("cannot decode version \(version)")
+        }
+        prompt.updated = Date()
+        let url = fileURL(for: slug)
+
+        // Save current as a new version before rollback
+        if FileManager.default.fileExists(atPath: url.path) {
+            try saveVersion(slug: slug)
+        }
+
+        let encoded = try MarkdownCodec.encode(prompt)
+        try encoded.write(to: url, atomically: true, encoding: .utf8)
+        try upsertIndex(prompt, fileMTime: mtime(of: url))
+        return prompt
+    }
+
+    // MARK: - Usage analytics
+
+    public struct UsageStats {
+        public let totalPrompts: Int
+        public let totalUses: Int
+        public let topByUse: [(prompt: Prompt, uses: Int)]
+        public let recentlyUsed: [(prompt: Prompt, lastUsed: Date)]
+        public let tagDistribution: [(tag: String, count: Int)]
+        public let unusedCount: Int
+    }
+
+    public func stats(topN: Int = 10) throws -> UsageStats {
+        let all = try self.all()
+        let totalPrompts = all.count
+        let totalUses = all.reduce(0) { $0 + $1.useCount }
+
+        let topByUse = all
+            .filter { $0.useCount > 0 }
+            .sorted { $0.useCount > $1.useCount }
+            .prefix(topN)
+            .map { (prompt: $0, uses: $0.useCount) }
+
+        let recentlyUsed = all
+            .compactMap { p -> (prompt: Prompt, lastUsed: Date)? in
+                guard let last = p.lastUsed else { return nil }
+                return (prompt: p, lastUsed: last)
+            }
+            .sorted { $0.lastUsed > $1.lastUsed }
+            .prefix(topN)
+            .map { $0 }
+
+        var tagCounts: [String: Int] = [:]
+        for p in all {
+            for tag in p.tags { tagCounts[tag, default: 0] += 1 }
+        }
+        let tagDistribution = tagCounts
+            .sorted { $0.value > $1.value }
+            .map { (tag: $0.key, count: $0.value) }
+
+        let unusedCount = all.filter { $0.useCount == 0 }.count
+
+        return UsageStats(
+            totalPrompts: totalPrompts,
+            totalUses: totalUses,
+            topByUse: Array(topByUse),
+            recentlyUsed: Array(recentlyUsed),
+            tagDistribution: tagDistribution,
+            unusedCount: unusedCount
+        )
     }
 
     // MARK: - Private helpers

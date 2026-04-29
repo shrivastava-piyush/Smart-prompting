@@ -10,6 +10,7 @@ final class LibraryViewModel: ObservableObject {
     @Published var toast: String = ""
     @Published var iCloudSyncing: Bool = false
     @Published var iCloudMessage: String = ""
+    @Published var usageStats: PromptStore.UsageStats?
 
     private let sp: SmartPrompting?
 
@@ -64,6 +65,11 @@ final class LibraryViewModel: ObservableObject {
     func delete(_ prompt: Prompt) {
         try? sp?.store.delete(slug: prompt.slug)
         refresh()
+    }
+
+    func loadStats() {
+        guard let sp = sp else { return }
+        usageStats = try? sp.store.stats()
     }
 
     func add(body: String) async {
