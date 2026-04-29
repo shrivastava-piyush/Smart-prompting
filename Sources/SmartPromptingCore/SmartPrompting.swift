@@ -5,6 +5,7 @@ public final class SmartPrompting: @unchecked Sendable {
     public let store: PromptStore
     public let search: Search
     public let autoTag: AutoTag
+    public let assembly: AssemblyEngine
 
     public init(
         promptsDir: URL? = nil,
@@ -15,6 +16,7 @@ public final class SmartPrompting: @unchecked Sendable {
         self.store = try PromptStore(promptsDir: promptsDir, indexDir: indexDir, embeddings: embeddings)
         self.search = Search(store: store, embeddings: embeddings)
         self.autoTag = autoTag
+        self.assembly = AssemblyEngine(store: store, search: search)
     }
 
     /// Create a new prompt from raw text, asking AutoTag for a title/tags/slug.

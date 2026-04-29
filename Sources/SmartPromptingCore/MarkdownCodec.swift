@@ -37,6 +37,9 @@ public enum MarkdownCodec {
             "updated": iso.string(from: p.updated),
             "use_count": p.useCount
         ]
+        if !p.requires.isEmpty {
+            fm["requires"] = p.requires
+        }
         if let last = p.lastUsed {
             fm["last_used"] = iso.string(from: last)
         } else {
@@ -66,6 +69,7 @@ public enum MarkdownCodec {
         let title = (fm["title"] as? String) ?? slug
         let tags = (fm["tags"] as? [String]) ?? []
         let placeholders = (fm["placeholders"] as? [String]) ?? []
+        let requires = (fm["requires"] as? [String]) ?? []
         let created = (fm["created"] as? String).flatMap { iso.date(from: $0) } ?? Date()
         let updated = (fm["updated"] as? String).flatMap { iso.date(from: $0) } ?? created
         let useCount = (fm["use_count"] as? Int) ?? 0
@@ -81,6 +85,7 @@ public enum MarkdownCodec {
             body: body,
             tags: tags,
             placeholders: placeholders,
+            requires: requires,
             created: created,
             updated: updated,
             useCount: useCount,

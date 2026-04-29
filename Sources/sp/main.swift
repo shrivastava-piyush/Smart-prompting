@@ -8,7 +8,7 @@ struct SP: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "sp",
         abstract: "Smart Prompting CLI — save and recall long prompts.",
-        subcommands: [Add.self, Find.self, Use.self, List.self, Edit.self, Remove.self, History.self, Rollback.self, Stats.self, Doctor.self, SetKey.self],
+        subcommands: [Add.self, Find.self, Use.self, Assemble.self, Dag.self, List.self, Edit.self, Remove.self, History.self, Rollback.self, Stats.self, Doctor.self, SetKey.self],
         defaultSubcommand: Find.self
     )
 }
@@ -151,6 +151,184 @@ struct Use: AsyncParsableCommand {
         try sp.store.recordUse(prompt)
         if !printOnly { Clipboard.copy(rendered) }
         print(rendered)
+    }
+}
+
+// MARK: - sp assemble
+
+struct Assemble: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "assemble",
+        abstract: "Assemble a composite prompt by resolving @{slug} fragment references."
+    )
+
+    @Argument(parsing: .remaining, help: "Query string or slug to assemble.")
+    var query: [String] = []
+
+    @Option(name: [.customShort("v"), .long],
+            parsing: .upToNextOption,
+            help: "Placeholder values as key=value (repeatable).")
+    var values: [String] = []
+
+    @Flag(name: [.customShort("s"), .long], help: "Use slug directly instead of searching.")
+    var slug: Bool = false
+
+    @Flag(name: [.customShort("p"), .long], help: "Print to stdout only (do not copy to clipboard).")
+    var printOnly: Bool = false
+
+    @Flag(name: [.long], help: "Show execution DAG before assembling.")
+    var showDag: Bool = false
+
+    func run() async throws {
+        let sp = try SmartPrompting()
+        let q = query.joined(separator: " ")
+        guard !q.isEmpty else {
+            throw ValidationError("Provide a slug or query to assemble.")
+        }
+
+        var map: [String: String] = [:]
+        for kv in values {
+            if let eq = kv.firstIndex(of: "=") {
+                map[String(kv[..<eq])] = String(kv[kv.index(after: eq)...])
+            }
+        }
+
+        // Resolve the root slug
+        let rootSlug: String
+        if slug {
+            rootSlug = q
+        } else {
+            let hits = try sp.search.query(q, limit: 1)
+            guard let top = hits.first else {
+                throw SmartPromptingError.promptNotFound(q)
+            }
+            rootSlug = top.prompt.slug
+        }
+
+        // Collect missing placeholders interactively
+        let placeholders = try sp.assembly.allPlaceholders(for: rootSlug)
+        for (node, name) in placeholders where map[name] == nil {
+            if TemplateEngine.systemVariableNames.contains(name.lowercased()) { continue }
+            FileHandle.standardError.write(Data("[\(node)] \(name): ".utf8))
+            map[name] = readLine() ?? ""
+        }
+
+        if showDag {
+            let decomp = try sp.assembly.decompose(slug: rootSlug)
+            printDAG(decomp)
+            FileHandle.standardError.write(Data("\n--- Assembled output ---\n".utf8))
+        }
+
+        let result = try sp.assembly.assemble(slug: rootSlug, values: map)
+
+        if !printOnly { Clipboard.copy(result.assembledText) }
+        print(result.assembledText)
+
+        if !printOnly {
+            FileHandle.standardError.write(Data(
+                "✓ assembled \(result.nodeCount) fragment\(result.nodeCount == 1 ? "" : "s") → clipboard\n".utf8
+            ))
+        }
+    }
+
+    private func printDAG(_ d: AssemblyEngine.Decomposition) {
+        FileHandle.standardError.write(Data("DAG: \(d.nodes.count) node(s), root = \(d.rootSlug)\n".utf8))
+        FileHandle.standardError.write(Data("Execution order: \(d.executionOrder.joined(separator: " → "))\n\n".utf8))
+        for node in d.nodes.sorted(by: { d.executionOrder.firstIndex(of: $0.id) ?? 0 < d.executionOrder.firstIndex(of: $1.id) ?? 0 }) {
+            let deps = node.dependencyCount > 0 ? " (requires \(node.dependencyCount) dep\(node.dependencyCount == 1 ? "" : "s"))" : ""
+            let ph = node.hasPlaceholders ? " [has placeholders]" : ""
+            FileHandle.standardError.write(Data("  [\(node.id)] \(node.title)\(deps)\(ph)\n".utf8))
+        }
+    }
+}
+
+// MARK: - sp dag
+
+struct Dag: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "dag",
+        abstract: "Visualize the dependency graph for a composite prompt."
+    )
+
+    @Argument(help: "Slug of the root prompt.") var slug: String
+
+    @Flag(name: [.long], help: "Output as JSON for programmatic use.")
+    var json: Bool = false
+
+    func run() async throws {
+        let sp = try SmartPrompting()
+        guard try sp.store.get(slug: slug) != nil else {
+            throw SmartPromptingError.promptNotFound(slug)
+        }
+
+        let decomp = try sp.assembly.decompose(slug: slug)
+
+        if json {
+            printJSON(decomp)
+        } else {
+            printTree(decomp)
+        }
+    }
+
+    private func printTree(_ d: AssemblyEngine.Decomposition) {
+        let nodeMap = Dictionary(uniqueKeysWithValues: d.nodes.map { ($0.id, $0) })
+        let childMap: [String: [String]] = {
+            var m: [String: [String]] = [:]
+            for e in d.edges { m[e.from, default: []].append(e.to) }
+            return m
+        }()
+
+        print("Prompt DAG: \(d.rootSlug)")
+        print("Nodes: \(d.nodes.count)  Edges: \(d.edges.count)")
+        print("Execution: \(d.executionOrder.joined(separator: " → "))")
+        print("")
+
+        func walk(_ slug: String, prefix: String, isLast: Bool) {
+            let connector = isLast ? "└── " : "├── "
+            let node = nodeMap[slug]
+            let title = node?.title ?? slug
+            let extras: [String] = [
+                node?.hasPlaceholders == true ? "{{…}}" : nil,
+                (node?.dependencyCount ?? 0) > 0 ? "\(node!.dependencyCount) deps" : nil
+            ].compactMap { $0 }
+            let suffix = extras.isEmpty ? "" : "  (\(extras.joined(separator: ", ")))"
+            print("\(prefix)\(connector)\(slug): \(title)\(suffix)")
+
+            let children = childMap[slug] ?? []
+            for (i, child) in children.enumerated() {
+                let childPrefix = prefix + (isLast ? "    " : "│   ")
+                walk(child, prefix: childPrefix, isLast: i == children.count - 1)
+            }
+        }
+
+        // Find root (nodes with no incoming edges)
+        let targets = Set(d.edges.map(\.to))
+        let roots = d.nodes.filter { !targets.contains($0.id) }.map(\.id)
+        for (i, root) in (roots.isEmpty ? [d.rootSlug] : roots).enumerated() {
+            walk(root, prefix: "", isLast: i == roots.count - 1)
+        }
+    }
+
+    private func printJSON(_ d: AssemblyEngine.Decomposition) {
+        let obj: [String: Any] = [
+            "root": d.rootSlug,
+            "execution_order": d.executionOrder,
+            "nodes": d.nodes.map { n -> [String: Any] in
+                [
+                    "id": n.id,
+                    "title": n.title,
+                    "body_preview": n.bodyPreview,
+                    "dependency_count": n.dependencyCount,
+                    "has_placeholders": n.hasPlaceholders
+                ]
+            },
+            "edges": d.edges.map { ["from": $0.from, "to": $0.to] }
+        ]
+        if let data = try? JSONSerialization.data(
+            withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]
+        ), let str = String(data: data, encoding: .utf8) {
+            print(str)
+        }
     }
 }
 

@@ -35,10 +35,18 @@ struct PromptListView: View {
                 }
             }
             .sheet(item: $selected) { p in
-                PromptDetailView(prompt: p) { values in
-                    vm.copy(p, values: values)
-                    selected = nil
-                }
+                PromptActionView(
+                    prompt: p,
+                    sp: vm.spInstance,
+                    onDismiss: { selected = nil },
+                    onCopy: { text in
+                        Clipboard.copy(text)
+                        try? vm.spInstance?.store.recordUse(p)
+                        vm.toast = "Copied: \(p.title)"
+                        vm.refresh()
+                        selected = nil
+                    }
+                )
             }
             .sheet(isPresented: $showAdd) {
                 AddPromptView { body in

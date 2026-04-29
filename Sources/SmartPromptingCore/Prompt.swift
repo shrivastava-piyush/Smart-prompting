@@ -9,6 +9,7 @@ public struct Prompt: Codable, Equatable, Identifiable, Sendable {
     public var body: String              // raw prompt text (no frontmatter)
     public var tags: [String]
     public var placeholders: [String]    // parsed from {{name}}
+    public var requires: [String]        // explicit @{slug} dependencies from frontmatter
     public var created: Date
     public var updated: Date
     public var useCount: Int
@@ -21,6 +22,7 @@ public struct Prompt: Codable, Equatable, Identifiable, Sendable {
         body: String,
         tags: [String] = [],
         placeholders: [String] = [],
+        requires: [String] = [],
         created: Date = Date(),
         updated: Date = Date(),
         useCount: Int = 0,
@@ -32,6 +34,7 @@ public struct Prompt: Codable, Equatable, Identifiable, Sendable {
         self.body = body
         self.tags = tags
         self.placeholders = placeholders
+        self.requires = requires
         self.created = created
         self.updated = updated
         self.useCount = useCount

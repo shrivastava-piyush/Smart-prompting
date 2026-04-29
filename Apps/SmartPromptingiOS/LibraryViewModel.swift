@@ -12,10 +12,11 @@ final class LibraryViewModel: ObservableObject {
     @Published var iCloudMessage: String = ""
     @Published var usageStats: PromptStore.UsageStats?
 
-    private let sp: SmartPrompting?
+    let spInstance: SmartPrompting?
+    private var sp: SmartPrompting? { spInstance }
 
     init() {
-        self.sp = try? SmartPrompting()
+        self.spInstance = try? SmartPrompting()
         checkICloudStatus()
     }
 
