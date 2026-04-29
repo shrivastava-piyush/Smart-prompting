@@ -30,4 +30,35 @@ final class MarkdownCodecTests: XCTestCase {
     func testMissingFrontmatterThrows() {
         XCTAssertThrowsError(try MarkdownCodec.decode("just text", slug: "x"))
     }
+
+    func testRequiresRoundTrip() throws {
+        let p = Prompt(
+            id: "req-test",
+            slug: "with-deps",
+            title: "With Deps",
+            body: "Main body @{dep-a}",
+            tags: ["test"],
+            placeholders: [],
+            requires: ["dep-a", "dep-b"]
+        )
+        let text = try MarkdownCodec.encode(p)
+        XCTAssertTrue(text.contains("requires"))
+
+        let decoded = try MarkdownCodec.decode(text, slug: "with-deps")
+        XCTAssertEqual(decoded.requires, ["dep-a", "dep-b"])
+    }
+
+    func testRequiresEmptyByDefault() throws {
+        let p = Prompt(
+            id: "no-req",
+            slug: "simple",
+            title: "Simple",
+            body: "just text"
+        )
+        let text = try MarkdownCodec.encode(p)
+        XCTAssertFalse(text.contains("requires"))
+
+        let decoded = try MarkdownCodec.decode(text, slug: "simple")
+        XCTAssertTrue(decoded.requires.isEmpty)
+    }
 }

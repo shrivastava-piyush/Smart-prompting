@@ -32,4 +32,40 @@ final class TemplateEngineTests: XCTestCase {
         let out = try TemplateEngine.render("{{ name }}", with: ["name": "Ada"])
         XCTAssertEqual(out, "Ada")
     }
+
+    // MARK: - System variables
+
+    func testSystemVariableAutoResolves() throws {
+        let out = try TemplateEngine.render("id: {{uuid}}", with: [:])
+        XCTAssertFalse(out.contains("{{uuid}}"))
+        XCTAssertTrue(out.hasPrefix("id: "))
+        XCTAssertTrue(out.count > 5)
+    }
+
+    func testTodaySystemVariable() throws {
+        let out = try TemplateEngine.render("date: {{today}}", with: [:])
+        XCTAssertFalse(out.contains("{{today}}"))
+    }
+
+    func testSystemVarsNotPrompted() {
+        let body = "{{today}} and {{name}}"
+        let user = TemplateEngine.userPlaceholders(in: body)
+        XCTAssertEqual(user, ["name"])
+        XCTAssertFalse(user.contains("today"))
+    }
+
+    func testMixedSystemAndUserVars() throws {
+        let out = try TemplateEngine.render(
+            "{{year}}-{{name}}",
+            with: ["name": "test"]
+        )
+        XCTAssertFalse(out.contains("{{year}}"))
+        XCTAssertTrue(out.contains("test"))
+    }
+
+    func testSystemVarCaseInsensitive() throws {
+        let body = "{{TODAY}} and {{Year}}"
+        let user = TemplateEngine.userPlaceholders(in: body)
+        XCTAssertTrue(user.isEmpty)
+    }
 }
