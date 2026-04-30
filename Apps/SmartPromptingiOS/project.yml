@@ -18,6 +18,7 @@ targets:
         excludes:
           - project.yml
           - "*.entitlements"
+          - Info.plist
           - KeyboardExtension
           - ShareExtension
     info:
@@ -26,7 +27,7 @@ targets:
       path: SmartPromptingiOS.entitlements
     settings:
       base:
-        INFOPLIST_FILE: Apps/SmartPromptingiOS/Info.plist
+        CODE_SIGN_STYLE: Automatic
         PRODUCT_BUNDLE_IDENTIFIER: com.smartprompting.ios
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
         SWIFT_VERSION: "5.9"
@@ -42,8 +43,21 @@ targets:
       - path: KeyboardExtension
     info:
       path: KeyboardExtension/Info.plist
+      properties:
+        CFBundleDisplayName: SmartPrompting Keyboard
+        NSExtension:
+          NSExtensionAttributes:
+            IsASCIICapable: false
+            PrefersRightToLeft: false
+            PrimaryLanguage: en-US
+            RequestsOpenAccess: true
+          NSExtensionPointIdentifier: com.apple.keyboard-service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).KeyboardViewController
+    entitlements:
+      path: KeyboardExtension/KeyboardExtension.entitlements
     settings:
       base:
+        CODE_SIGN_STYLE: Automatic
         PRODUCT_BUNDLE_IDENTIFIER: com.smartprompting.ios.keyboard
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
         SWIFT_VERSION: "5.9"
@@ -57,8 +71,18 @@ targets:
       - path: ShareExtension
     info:
       path: ShareExtension/Info.plist
+      properties:
+        CFBundleDisplayName: SmartPrompting Share
+        NSExtension:
+          NSExtensionAttributes:
+            NSExtensionActivationRule: TRUEPREDICATE
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+    entitlements:
+      path: ShareExtension/ShareExtension.entitlements
     settings:
       base:
+        CODE_SIGN_STYLE: Automatic
         PRODUCT_BUNDLE_IDENTIFIER: com.smartprompting.ios.share
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
         SWIFT_VERSION: "5.9"

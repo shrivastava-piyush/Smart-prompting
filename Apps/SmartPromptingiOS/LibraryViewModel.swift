@@ -14,10 +14,105 @@ final class LibraryViewModel: ObservableObject {
 
     let spInstance: SmartPrompting?
     private var sp: SmartPrompting? { spInstance }
+    private var refreshTimer: Timer?
+
+    private final class WatcherState {
+        var watcher: DispatchSourceFileSystemObject?
+        var descriptor: Int32 = -1
+
+        func stop() {
+            watcher?.cancel()
+            watcher = nil
+            if descriptor != -1 {
+                close(descriptor)
+                descriptor = -1
+            }
+        }
+    }
+
+    private let watcherState = WatcherState()
 
     init() {
         self.spInstance = try? SmartPrompting()
         checkICloudStatus()
+        setupWatcher()
+        startTimer()
+    }
+
+    deinit {
+        watcherState.stop()
+        refreshTimer?.invalidate()
+    }
+
+    func selectDirectory(_ url: URL) {
+        guard url.startAccessingSecurityScopedResource() else {
+            toast = "Permission denied for this folder."
+            return
+        }
+
+        do {
+            try ICloudSync.saveBookmark(for: url)
+            watcherState.stop()
+            setupWatcher()
+            refresh()
+            toast = "Syncing with selected folder"
+        } catch {
+            toast = "Failed to select directory: \(error.localizedDescription)"
+        }
+    }
+
+    func resetDirectory() {
+        ICloudSync.clearUserSelection()
+        watcherState.stop()
+        setupWatcher()
+        refresh()
+        toast = "Reset to default local storage"
+    }
+
+    func forceSync() {
+        guard let sp = sp else { return }
+        toast = "Re-indexing..."
+        try? FileManager.default.removeItem(at: sp.store.dbURL)
+        do {
+            refresh()
+            toast = "Re-indexed \(allPrompts.count) prompts"
+        } catch {
+            toast = "Re-index failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func startTimer() {
+        refreshTimer?.invalidate()
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.refresh()
+            }
+        }
+    }
+
+    private func setupWatcher() {
+        guard let url = sp?.store.promptsDir else { return }
+
+        watcherState.stop()
+
+        let fd = open(url.path, O_EVTONLY)
+        guard fd != -1 else { return }
+        watcherState.descriptor = fd
+
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: .write,
+            queue: DispatchQueue.global()
+        )
+
+        source.setEventHandler { [weak self] in
+            Task { @MainActor in
+                self?.refresh()
+            }
+        }
+
+        source.resume()
+        watcherState.watcher = source
     }
 
     func checkICloudStatus() {
@@ -34,9 +129,16 @@ final class LibraryViewModel: ObservableObject {
 
     func refresh() {
         guard let sp = sp else { return }
+        ICloudSync.triggerDownloads()
         try? sp.store.syncIndexFromDisk()
-        allPrompts = (try? sp.store.all()) ?? []
-        search()
+
+        let fetched = (try? sp.store.all()) ?? []
+        if fetched.count != allPrompts.count ||
+           fetched.map(\.id) != allPrompts.map(\.id) ||
+           fetched.map(\.updated) != allPrompts.map(\.updated) {
+            allPrompts = fetched
+            search()
+        }
         checkICloudStatus()
     }
 
@@ -64,8 +166,13 @@ final class LibraryViewModel: ObservableObject {
     }
 
     func delete(_ prompt: Prompt) {
-        try? sp?.store.delete(slug: prompt.slug)
-        refresh()
+        do {
+            try sp?.store.delete(slug: prompt.slug)
+            refresh()
+            toast = "Deleted: \(prompt.title)"
+        } catch {
+            toast = "Delete failed: \(error.localizedDescription)"
+        }
     }
 
     func loadStats() {
@@ -73,9 +180,14 @@ final class LibraryViewModel: ObservableObject {
         usageStats = try? sp.store.stats()
     }
 
-    func add(body: String) async {
+    func add(title: String, body: String) async {
         guard let sp = sp, !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        _ = try? await sp.create(from: body)
-        refresh()
+        do {
+            _ = try await sp.create(from: body, titleHint: title)
+            refresh()
+            toast = "Saved: \(title)"
+        } catch {
+            toast = "Save failed: \(error.localizedDescription)"
+        }
     }
 }

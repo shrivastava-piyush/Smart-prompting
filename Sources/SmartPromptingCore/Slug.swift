@@ -28,6 +28,9 @@ public enum Slug {
 
     /// Appends an incrementing suffix until the candidate path doesn't exist.
     public static func uniqueSlug(base: String, in dir: URL) -> String {
+        let isScoped = dir.startAccessingSecurityScopedResource()
+        defer { if isScoped { dir.stopAccessingSecurityScopedResource() } }
+        
         let fm = FileManager.default
         var candidate = base
         var i = 2

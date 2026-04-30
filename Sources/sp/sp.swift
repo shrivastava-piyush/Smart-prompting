@@ -8,9 +8,66 @@ struct SP: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "sp",
         abstract: "Smart Prompting CLI — save and recall long prompts.",
-        subcommands: [Add.self, Find.self, Use.self, Assemble.self, Dag.self, List.self, Edit.self, Remove.self, History.self, Rollback.self, Stats.self, Doctor.self, SetKey.self],
+        subcommands: [
+            Add.self, Find.self, Use.self, Assemble.self, Dag.self,
+            List.self, Edit.self, Remove.self,
+            History.self, Rollback.self, Stats.self,
+            Doctor.self, SetKey.self, Config.self
+        ],
         defaultSubcommand: Find.self
     )
+
+    @Option(name: [.short, .long], help: "Override prompts directory for this command.")
+    var dir: String?
+
+    static func spInstance(dirOverride: String?) throws -> SmartPrompting {
+        let url = dirOverride.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
+        return try SmartPrompting(promptsDir: url)
+    }
+
+    static func promptUse(sp: SmartPrompting, prompt: Prompt) throws -> String {
+        var map: [String: String] = [:]
+        for name in TemplateEngine.userPlaceholders(in: prompt.body) {
+            FileHandle.standardError.write(Data("\(name): ".utf8))
+            map[name] = readLine() ?? ""
+        }
+        let rendered = try TemplateEngine.render(prompt.body, with: map)
+        try sp.store.recordUse(prompt)
+        return rendered
+    }
+}
+
+// MARK: - sp config
+
+struct Config: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Configure CLI settings like the prompts directory."
+    )
+
+    @Option(name: [.short, .long], help: "Set a persistent prompts directory.")
+    var dir: String?
+
+    @Flag(name: [.short, .long], help: "Reset to the default directory.")
+    var reset: Bool = false
+
+    func run() async throws {
+        if reset {
+            ICloudSync.clearUserSelection()
+            print("✓ Reset to default directory.")
+            return
+        }
+
+        if let dir = dir {
+            let url = URL(fileURLWithPath: (dir as NSString).expandingTildeInPath).absoluteURL
+            try ICloudSync.saveBookmark(for: url)
+            print("✓ Prompts directory set to: \(url.path)")
+        } else {
+            let current = try ICloudSync.promptsDirectory()
+            print("Current Prompts Directory: \(current.path)")
+            print("Status: \(ICloudSync.statusMessage)")
+            print("\nTo change it, use: sp config --dir <path>")
+        }
+    }
 }
 
 // MARK: - sp add
@@ -19,6 +76,8 @@ struct Add: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Save a new prompt. Reads from --file, stdin, or the clipboard."
     )
+
+    @OptionGroup var globals: SP
 
     @Option(name: [.short, .long], help: "Read prompt body from this file.")
     var file: String?
@@ -34,7 +93,7 @@ struct Add: AsyncParsableCommand {
         guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ValidationError("Empty prompt body.")
         }
-        let sp = try SmartPrompting()
+        let sp = try SP.spInstance(dirOverride: globals.dir)
         let prompt = try await sp.create(from: body, titleHint: title)
         print("Saved: \(prompt.slug)  —  \(prompt.title)")
         if !prompt.tags.isEmpty {
@@ -52,7 +111,6 @@ struct Add: AsyncParsableCommand {
         if clipboard {
             return try runPbpaste()
         }
-        // Stdin
         if isatty(fileno(stdin)) == 0 {
             var buf = ""
             while let line = readLine(strippingNewline: false) { buf += line }
@@ -82,13 +140,15 @@ struct Find: AsyncParsableCommand {
         abstract: "Search prompts. With no query, lists most-recent."
     )
 
+    @OptionGroup var globals: SP
+
     @Argument(parsing: .remaining) var query: [String] = []
     @Option(name: [.short, .long]) var limit: Int = 10
     @Flag(name: [.customShort("n"), .long], help: "Print top hit's body to stdout and exit (no picker).")
     var noInteractive: Bool = false
 
     func run() async throws {
-        let sp = try SmartPrompting()
+        let sp = try SP.spInstance(dirOverride: globals.dir)
         let q = query.joined(separator: " ")
         let hits = try sp.search.query(q, limit: limit)
         if hits.isEmpty {
@@ -109,7 +169,7 @@ struct Find: AsyncParsableCommand {
             return
         }
         let picked = hits[n - 1].prompt
-        let rendered = try promptUse(sp: sp, prompt: picked)
+        let rendered = try SP.promptUse(sp: sp, prompt: picked)
         Clipboard.copy(rendered)
         print(rendered)
         FileHandle.standardError.write(Data("✓ copied to clipboard\n".utf8))
@@ -123,6 +183,8 @@ struct Use: AsyncParsableCommand {
         abstract: "Render a prompt by slug, filling any placeholders."
     )
 
+    @OptionGroup var globals: SP
+
     @Argument(help: "The slug (filename stem) of the prompt.") var slug: String
     @Option(name: [.customShort("v"), .long],
             parsing: .upToNextOption,
@@ -133,7 +195,7 @@ struct Use: AsyncParsableCommand {
     var printOnly: Bool = false
 
     func run() async throws {
-        let sp = try SmartPrompting()
+        let sp = try SP.spInstance(dirOverride: globals.dir)
         guard let prompt = try sp.store.get(slug: slug) else {
             throw SmartPromptingError.promptNotFound(slug)
         }
@@ -162,6 +224,8 @@ struct Assemble: AsyncParsableCommand {
         abstract: "Assemble a composite prompt by resolving @{slug} fragment references."
     )
 
+    @OptionGroup var globals: SP
+
     @Argument(parsing: .remaining, help: "Query string or slug to assemble.")
     var query: [String] = []
 
@@ -180,7 +244,7 @@ struct Assemble: AsyncParsableCommand {
     var showDag: Bool = false
 
     func run() async throws {
-        let sp = try SmartPrompting()
+        let sp = try SP.spInstance(dirOverride: globals.dir)
         let q = query.joined(separator: " ")
         guard !q.isEmpty else {
             throw ValidationError("Provide a slug or query to assemble.")
@@ -193,7 +257,6 @@ struct Assemble: AsyncParsableCommand {
             }
         }
 
-        // Resolve the root slug
         let rootSlug: String
         if slug {
             rootSlug = q
@@ -205,7 +268,6 @@ struct Assemble: AsyncParsableCommand {
             rootSlug = top.prompt.slug
         }
 
-        // Collect missing placeholders interactively
         let placeholders = try sp.assembly.allPlaceholders(for: rootSlug)
         for (node, name) in placeholders where map[name] == nil {
             if TemplateEngine.systemVariableNames.contains(name.lowercased()) { continue }
@@ -250,13 +312,15 @@ struct Dag: AsyncParsableCommand {
         abstract: "Visualize the dependency graph for a composite prompt."
     )
 
+    @OptionGroup var globals: SP
+
     @Argument(help: "Slug of the root prompt.") var slug: String
 
     @Flag(name: [.long], help: "Output as JSON for programmatic use.")
     var json: Bool = false
 
     func run() async throws {
-        let sp = try SmartPrompting()
+        let sp = try SP.spInstance(dirOverride: globals.dir)
         guard try sp.store.get(slug: slug) != nil else {
             throw SmartPromptingError.promptNotFound(slug)
         }
@@ -301,7 +365,6 @@ struct Dag: AsyncParsableCommand {
             }
         }
 
-        // Find root (nodes with no incoming edges)
         let targets = Set(d.edges.map(\.to))
         let roots = d.nodes.filter { !targets.contains($0.id) }.map(\.id)
         for (i, root) in (roots.isEmpty ? [d.rootSlug] : roots).enumerated() {
@@ -340,10 +403,12 @@ struct List: AsyncParsableCommand {
         abstract: "List prompts, most-recently-used first."
     )
 
+    @OptionGroup var globals: SP
+
     @Option(name: [.customShort("t"), .long]) var tag: String?
 
     func run() async throws {
-        let sp = try SmartPrompting()
+        let sp = try SP.spInstance(dirOverride: globals.dir)
         let prompts = tag.map { try? sp.store.byTag($0) } ?? (try? sp.store.all())
         let list = prompts ?? []
         if list.isEmpty {
@@ -365,10 +430,12 @@ struct Edit: AsyncParsableCommand {
         abstract: "Open a prompt's markdown file in $EDITOR."
     )
 
+    @OptionGroup var globals: SP
+
     @Argument var slug: String
 
     func run() async throws {
-        let sp = try SmartPrompting()
+        let sp = try SP.spInstance(dirOverride: globals.dir)
         let url = sp.store.promptsDir.appendingPathComponent("\(slug).md")
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw SmartPromptingError.promptNotFound(slug)
@@ -392,11 +459,13 @@ struct Remove: AsyncParsableCommand {
         abstract: "Delete a prompt."
     )
 
+    @OptionGroup var globals: SP
+
     @Argument var slug: String
     @Flag(name: [.customShort("f"), .long]) var force: Bool = false
 
     func run() async throws {
-        let sp = try SmartPrompting()
+        let sp = try SP.spInstance(dirOverride: globals.dir)
         guard try sp.store.get(slug: slug) != nil else {
             throw SmartPromptingError.promptNotFound(slug)
         }
@@ -416,11 +485,12 @@ struct Doctor: AsyncParsableCommand {
         abstract: "Diagnose setup: iCloud status, storage path, embedding model, API key."
     )
 
-    func run() async throws {
-        let sp = try SmartPrompting()
+    @OptionGroup var globals: SP
 
-        // iCloud status — the most important check
-        let syncStatus = ICloudSync.status()
+    func run() async throws {
+        let sp = try SP.spInstance(dirOverride: globals.dir)
+
+        let syncStatus = ICloudSync.status(overridingDir: sp.store.promptsDir)
         switch syncStatus {
         case .syncing(let path):
             print("iCloud Drive:      ✓ signed in & syncing")
@@ -457,6 +527,8 @@ struct SetKey: AsyncParsableCommand {
         abstract: "Store an ANTHROPIC_API_KEY in the Keychain for AutoTag."
     )
 
+    @OptionGroup var globals: SP
+
     @Argument(help: "The API key. Omit to clear.") var key: String?
 
     func run() async throws {
@@ -482,6 +554,8 @@ struct History: AsyncParsableCommand {
         abstract: "Show version history for a prompt."
     )
 
+    @OptionGroup var globals: SP
+
     @Argument(help: "The slug of the prompt.") var slug: String
 
     @Flag(name: [.customShort("b"), .long], help: "Print the body of a specific version.")
@@ -491,7 +565,7 @@ struct History: AsyncParsableCommand {
     var version: Int?
 
     func run() async throws {
-        let sp = try SmartPrompting()
+        let sp = try SP.spInstance(dirOverride: globals.dir)
         guard try sp.store.get(slug: slug) != nil else {
             throw SmartPromptingError.promptNotFound(slug)
         }
@@ -544,13 +618,15 @@ struct Rollback: AsyncParsableCommand {
         abstract: "Restore a prompt to a previous version."
     )
 
+    @OptionGroup var globals: SP
+
     @Argument(help: "The slug of the prompt.") var slug: String
     @Argument(help: "Version number to restore.") var version: Int
 
     @Flag(name: [.customShort("f"), .long]) var force: Bool = false
 
     func run() async throws {
-        let sp = try SmartPrompting()
+        let sp = try SP.spInstance(dirOverride: globals.dir)
         guard try sp.store.get(slug: slug) != nil else {
             throw SmartPromptingError.promptNotFound(slug)
         }
@@ -576,11 +652,13 @@ struct Stats: AsyncParsableCommand {
         abstract: "Show usage analytics for your prompt library."
     )
 
+    @OptionGroup var globals: SP
+
     @Option(name: [.short, .long], help: "Number of top items to show.")
     var top: Int = 10
 
     func run() async throws {
-        let sp = try SmartPrompting()
+        let sp = try SP.spInstance(dirOverride: globals.dir)
         let s = try sp.store.stats(topN: top)
 
         print("=== Smart Prompting Stats ===\n")
@@ -619,17 +697,4 @@ struct Stats: AsyncParsableCommand {
             }
         }
     }
-}
-
-// MARK: - helpers
-
-func promptUse(sp: SmartPrompting, prompt: Prompt) throws -> String {
-    var map: [String: String] = [:]
-    for name in TemplateEngine.userPlaceholders(in: prompt.body) {
-        FileHandle.standardError.write(Data("\(name): ".utf8))
-        map[name] = readLine() ?? ""
-    }
-    let rendered = try TemplateEngine.render(prompt.body, with: map)
-    try sp.store.recordUse(prompt)
-    return rendered
 }
